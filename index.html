@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Water Management - Test Panel</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  body { font-family: Arial, sans-serif; background:#0f172a; color:#e2e8f0; padding:20px; max-width:480px; margin:0 auto; }
+  h1 { font-size:20px; color:#5eead4; }
+  .card { background:#1e293b; border-radius:14px; padding:16px; margin-bottom:14px; }
+  button { padding:12px 18px; border:none; border-radius:10px; font-weight:bold; margin-right:10px; cursor:pointer; }
+  .open { background:#2dd4bf; color:#0f172a; }
+  .close { background:#f87171; color:#0f172a; }
+  pre { background:#020617; padding:10px; border-radius:8px; overflow:auto; font-size:12px; }
+  input, select { padding:8px; border-radius:6px; border:1px solid #334155; background:#0f172a; color:#fff; margin-bottom:8px; width:100%; box-sizing:border-box; }
+</style>
+</head>
+<body>
+  <h1>💧 Water Management - Own Test Panel</h1>
+
+  <div class="card">
+    <label>Apartment ID</label>
+    <input id="apartment" value="greenmeadows" />
+    <label>Floor</label>
+    <input id="floor" value="floor1" />
+    <label>Flat</label>
+    <input id="flat" value="101" />
+  </div>
+
+  <div class="card">
+    <button class="open" onclick="sendValve('OPEN')">Open Valve</button>
+    <button class="close" onclick="sendValve('CLOSE')">Close Valve</button>
+    <div id="valveResult" style="margin-top:10px;font-size:13px;"></div>
+  </div>
+
+  <div class="card">
+    <button onclick="loadFlat()">Refresh Flat Data</button>
+    <pre id="flatData">No data yet.</pre>
+  </div>
+
+  <div class="card">
+    <button onclick="loadAllFlats()">Refresh All Flats (Admin view)</button>
+    <pre id="allFlats">No data yet.</pre>
+  </div>
+
+<script>
+  const API_BASE = ""; // same origin, since this page is served by the backend itself
+
+  function ids() {
+    return {
+      apartment: document.getElementById('apartment').value.trim(),
+      floor: document.getElementById('floor').value.trim(),
+      flat: document.getElementById('flat').value.trim(),
+    };
+  }
+
+  async function sendValve(action) {
+    const { apartment, floor, flat } = ids();
+    const res = await fetch(`${API_BASE}/api/valve/${apartment}/${floor}/${flat}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action })
+    });
+    const data = await res.json();
+    document.getElementById('valveResult').textContent = JSON.stringify(data);
+  }
+
+  async function loadFlat() {
+    const { apartment, floor, flat } = ids();
+    const res = await fetch(`${API_BASE}/api/flats/${apartment}/${floor}/${flat}`);
+    const data = await res.json();
+    document.getElementById('flatData').textContent = JSON.stringify(data, null, 2);
+  }
+
+  async function loadAllFlats() {
+    const res = await fetch(`${API_BASE}/api/flats`);
+    const data = await res.json();
+    document.getElementById('allFlats').textContent = JSON.stringify(data, null, 2);
+  }
+</script>
+</body>
+</html>
