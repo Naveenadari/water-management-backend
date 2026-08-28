@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Water Management - Test Panel</title>
+<title>Water Management - Test Panel (HTTP)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
   body { font-family: Arial, sans-serif; background:#0f172a; color:#e2e8f0; padding:20px; max-width:480px; margin:0 auto; }
@@ -12,11 +12,11 @@
   .open { background:#2dd4bf; color:#0f172a; }
   .close { background:#f87171; color:#0f172a; }
   pre { background:#020617; padding:10px; border-radius:8px; overflow:auto; font-size:12px; }
-  input, select { padding:8px; border-radius:6px; border:1px solid #334155; background:#0f172a; color:#fff; margin-bottom:8px; width:100%; box-sizing:border-box; }
+  input { padding:8px; border-radius:6px; border:1px solid #334155; background:#0f172a; color:#fff; margin-bottom:8px; width:100%; box-sizing:border-box; }
 </style>
 </head>
 <body>
-  <h1>💧 Water Management - Own Test Panel</h1>
+  <h1>💧 Water Management - HTTP Test Panel</h1>
 
   <div class="card">
     <label>Apartment ID</label>
@@ -31,6 +31,10 @@
     <button class="open" onclick="sendValve('OPEN')">Open Valve</button>
     <button class="close" onclick="sendValve('CLOSE')">Close Valve</button>
     <div id="valveResult" style="margin-top:10px;font-size:13px;"></div>
+    <div style="margin-top:8px;font-size:11px;color:#94a3b8;">
+      Note: ESP32 checks for commands every ~5-10 seconds, so it may take
+      a few seconds for the valve to respond after clicking.
+    </div>
   </div>
 
   <div class="card">
@@ -44,7 +48,7 @@
   </div>
 
 <script>
-  const API_BASE = ""; // same origin, since this page is served by the backend itself
+  const API_BASE = "";
 
   function ids() {
     return {
@@ -80,3 +84,4 @@
 </script>
 </body>
 </html>
+
