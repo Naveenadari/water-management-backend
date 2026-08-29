@@ -225,9 +225,18 @@
 
   <div id="screen-analytics" class="hidden px" style="padding-top:24px;">
     <h1 style="margin-bottom:16px;">Analytics</h1>
-    <div class="tabs"><button class="tab active">Recent Readings</button></div>
+    <div class="tabs">
+      <button class="tab active" id="tabDaily" onclick="setUsageRange('daily')">Daily</button>
+      <button class="tab" id="tabWeekly" onclick="setUsageRange('weekly')">Weekly</button>
+      <button class="tab" id="tabMonthly" onclick="setUsageRange('monthly')">Monthly</button>
+    </div>
+    <div class="stats">
+      <div class="card stat c"><b id="usageAvg">—</b><small>Average · L</small></div>
+      <div class="card stat"><b id="usageMax">—</b><small>Maximum · L</small></div>
+      <div class="card stat"><b id="usageMin">—</b><small>Minimum · L</small></div>
+    </div>
     <div class="card">
-      <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:6px;">Flow Rate History (L/min)</div>
+      <div id="usageChartTitle" style="font-size:13px;font-weight:600;color:#fff;margin-bottom:6px;">Daily Usage (L)</div>
       <div class="bars" id="barsWrap"></div>
       <div class="barlabels" id="barLabels"></div>
     </div>
@@ -371,7 +380,7 @@
     document.getElementById('screen-analytics').classList.toggle('hidden', name !== 'analytics');
     document.getElementById('navHome').classList.toggle('active', name === 'home');
     document.getElementById('navAnalytics').classList.toggle('active', name === 'analytics');
-    if (name === 'analytics') loadHistory();
+    if (name === 'analytics') loadUsageChart();
   }
 
   function authHeaders() {
@@ -433,27 +442,80 @@
     } catch (e) { /* silent */ }
   }
 
-  async function loadHistory() {
+  let usageRange = 'daily';
+
+  function setUsageRange(range) {
+    usageRange = range;
+    document.getElementById('tabDaily').classList.toggle('active', range === 'daily');
+    document.getElementById('tabWeekly').classList.toggle('active', range === 'weekly');
+    document.getElementById('tabMonthly').classList.toggle('active', range === 'monthly');
+    loadUsageChart();
+  }
+
+  async function loadUsageChart() {
     try {
-      const res = await fetch(`/api/flats/${authUser.apartment}/${authUser.floor}/${authUser.flat}`, { headers: authHeaders() });
+      const res = await fetch(`/api/usage/${authUser.apartment}/${authUser.floor}/${authUser.flat}`, { headers: authHeaders() });
       const data = await res.json();
-      const hist = (data.history || []).slice(-8);
-      const wrap = document.getElementById('barsWrap');
-      const labels = document.getElementById('barLabels');
-      wrap.innerHTML = ''; labels.innerHTML = '';
-      const max = Math.max(1, ...hist.map(h => h.flow_lpm || 0));
-      hist.forEach(h => {
-        const bar = document.createElement('div');
-        bar.className = 'bar';
-        bar.style.height = Math.max(2, ((h.flow_lpm || 0) / max) * 130) + 'px';
-        wrap.appendChild(bar);
-        const lab = document.createElement('span');
-        const t = h.received_at ? new Date(h.received_at) : null;
-        lab.textContent = t ? t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-        labels.appendChild(lab);
-      });
-      if (hist.length === 0) wrap.innerHTML = '<span style="font-size:12px;color:#64748b;">No readings yet.</span>';
+      const days = data.days || []; // [{date:'YYYY-MM-DD', liters}], oldest first
+
+      let buckets = [];
+      if (usageRange === 'daily') {
+        document.getElementById('usageChartTitle').textContent = 'Daily Usage — Last 7 Days (L)';
+        buckets = days.slice(-7).map(d => ({ label: d.date.slice(5), liters: d.liters }));
+      } else if (usageRange === 'weekly') {
+        document.getElementById('usageChartTitle').textContent = 'Weekly Usage — Last 6 Weeks (L)';
+        const weekMap = {};
+        days.forEach(d => {
+          const dt = new Date(d.date);
+          const weekStart = new Date(dt); weekStart.setDate(dt.getDate() - dt.getDay());
+          const wk = weekStart.toISOString().slice(5, 10);
+          weekMap[wk] = (weekMap[wk] || 0) + d.liters;
+        });
+        buckets = Object.keys(weekMap).sort().slice(-6).map(wk => ({ label: wk, liters: weekMap[wk] }));
+      } else {
+        document.getElementById('usageChartTitle').textContent = 'Monthly Usage (L)';
+        const monthMap = {};
+        days.forEach(d => {
+          const mo = d.date.slice(0, 7);
+          monthMap[mo] = (monthMap[mo] || 0) + d.liters;
+        });
+        buckets = Object.keys(monthMap).sort().slice(-6).map(mo => ({ label: mo.slice(5), liters: monthMap[mo] }));
+      }
+
+      renderUsageBars(buckets);
     } catch (e) { /* silent */ }
+  }
+
+  function renderUsageBars(buckets) {
+    const wrap = document.getElementById('barsWrap');
+    const labels = document.getElementById('barLabels');
+    wrap.innerHTML = ''; labels.innerHTML = '';
+
+    if (buckets.length === 0) {
+      wrap.innerHTML = '<span style="font-size:12px;color:#64748b;">No usage data yet.</span>';
+      document.getElementById('usageAvg').textContent = '0';
+      document.getElementById('usageMax').textContent = '0';
+      document.getElementById('usageMin').textContent = '0';
+      return;
+    }
+
+    const values = buckets.map(b => b.liters);
+    const max = Math.max(1, ...values);
+    const avg = values.reduce((a, b) => a + b, 0) / values.length;
+
+    document.getElementById('usageAvg').textContent = avg.toFixed(1);
+    document.getElementById('usageMax').textContent = Math.max(...values).toFixed(1);
+    document.getElementById('usageMin').textContent = Math.min(...values).toFixed(1);
+
+    buckets.forEach(b => {
+      const bar = document.createElement('div');
+      bar.className = 'bar';
+      bar.style.height = Math.max(2, (b.liters / max) * 130) + 'px';
+      wrap.appendChild(bar);
+      const lab = document.createElement('span');
+      lab.textContent = b.label;
+      labels.appendChild(lab);
+    });
   }
 
   document.getElementById('dateNow').textContent = new Date().toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
