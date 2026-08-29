@@ -2,53 +2,202 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Water Management - Test Panel (HTTP)</title>
+<title>Water Management</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
-  body { font-family: Arial, sans-serif; background:#0f172a; color:#e2e8f0; padding:20px; max-width:480px; margin:0 auto; }
-  h1 { font-size:20px; color:#5eead4; }
-  .card { background:#1e293b; border-radius:14px; padding:16px; margin-bottom:14px; }
-  button { padding:12px 18px; border:none; border-radius:10px; font-weight:bold; margin-right:10px; cursor:pointer; }
-  .open { background:#2dd4bf; color:#0f172a; }
-  .close { background:#f87171; color:#0f172a; }
-  pre { background:#020617; padding:10px; border-radius:8px; overflow:auto; font-size:12px; }
-  input { padding:8px; border-radius:6px; border:1px solid #334155; background:#0f172a; color:#fff; margin-bottom:8px; width:100%; box-sizing:border-box; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, Arial, sans-serif;
+    background: #020617; color: #e2e8f0;
+    display: flex; justify-content: center;
+  }
+  .phone {
+    width: 100%; max-width: 430px; min-height: 100vh;
+    background: linear-gradient(180deg, #0f172a, #020617);
+    position: relative; padding-bottom: 90px;
+  }
+  .px { padding: 0 20px; }
+  h1 { font-size: 20px; color: #fff; margin: 0; }
+  .row { display: flex; align-items: center; justify-content: space-between; }
+  .top { padding: 24px 20px 0; }
+  .greet { display: flex; align-items: center; gap: 12px; }
+  .avatar {
+    width: 48px; height: 48px; border-radius: 16px;
+    background: linear-gradient(135deg, #22d3ee, #3b82f6);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: bold; color: #0f172a;
+  }
+  .sub { font-size: 12px; color: #94a3b8; }
+  .name { font-weight: bold; color: #fff; }
+  .name span { color: #64748b; font-weight: normal; font-size: 12px; }
+  .datebar { display:flex; justify-content:space-between; font-size:12px; color:#94a3b8; margin: 14px 0; }
+  .card {
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 18px; padding: 16px; margin-bottom: 12px; backdrop-filter: blur(8px);
+  }
+  .flowvis {
+    position: relative; height: 110px; border-radius: 16px; overflow: hidden;
+    background: linear-gradient(180deg, #0f172a, #1e293b); border: 1px solid rgba(255,255,255,0.1);
+  }
+  .flowvis .val { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  .flowvis .val b { font-size: 30px; color: #fff; }
+  .flowvis .val small { font-size: 10px; letter-spacing: 2px; color: #cbd5e1; }
+  .pipe { position:absolute; left:0; right:0; top:47px; height:16px; border-radius:8px; background:#0f172a; }
+  .pipe-glow { position:absolute; left:0; right:0; top:47px; height:16px; border-radius:8px;
+    background: linear-gradient(90deg, transparent, rgba(34,211,238,0.5), transparent); }
+  .dot { position:absolute; top:44px; width:12px; height:12px; border-radius:50%; background:#22d3ee; opacity:0; }
+  .flowing .dot { animation: flow 1.4s linear infinite; }
+  .dot:nth-child(2) { animation-delay:0.4s !important; background:#2dd4bf; }
+  .dot:nth-child(3) { animation-delay:0.8s !important; background:#fff; width:8px; height:8px; top:46px; }
+  @keyframes flow { 0% { left:-5%; opacity:1;} 90% {opacity:1;} 100% { left:100%; opacity:0; } }
+  .badge { font-size: 11px; font-weight: 600; padding: 5px 12px; border-radius: 999px; display:flex; align-items:center; gap:6px; }
+  .badge.on { color:#6ee7b7; background:rgba(52,211,153,0.1); border:1px solid rgba(52,211,153,0.3); }
+  .badge.off { color:#94a3b8; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); }
+  .dotpulse { width:6px; height:6px; border-radius:50%; background:#34d399; }
+  .stats { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:16px; }
+  .stat b { font-size: 20px; color:#fff; display:block; }
+  .stat.c b { color:#22d3ee; }
+  .stat small { font-size:10px; color:#94a3b8; }
+  .qa-title { color:#fff; font-weight:600; font-size:14px; margin-bottom:8px; }
+  .qa-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+  .qa {
+    background: rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1);
+    border-radius: 16px; aspect-ratio:1; display:flex; align-items:center; justify-content:center;
+    cursor:pointer; font-size:22px;
+  }
+  .qa.active { border-color: rgba(34,211,238,0.5); background: rgba(34,211,238,0.1); }
+  .qa-label { font-size: 10px; text-align:center; color:#cbd5e1; margin-top:6px; }
+  .errbox { margin-top:12px; font-size:12px; color:#fcd34d; background:rgba(251,191,36,0.1); border:1px solid rgba(251,191,36,0.3); border-radius:12px; padding:10px; }
+  .tabs { display:flex; gap:8px; margin: 16px 0; }
+  .tab { padding:6px 14px; border-radius:999px; font-size:12px; font-weight:600; background:rgba(255,255,255,0.05); color:#94a3b8; cursor:pointer; border:none; }
+  .tab.active { background: linear-gradient(90deg,#2dd4bf,#22d3ee); color:#0f172a; }
+  .bars { display:flex; align-items:flex-end; gap:8px; height:140px; padding-top:10px; }
+  .bar { flex:1; background: linear-gradient(180deg,#22d3ee,#0f766e); border-radius:6px 6px 0 0; position:relative; min-height:2px; }
+  .barlabels { display:flex; gap:8px; margin-top:6px; }
+  .barlabels span { flex:1; text-align:center; font-size:10px; color:#94a3b8; }
+  .hidden { display:none; }
+  .navwrap { position:fixed; bottom:0; left:0; right:0; display:flex; justify-content:center; }
+  .nav {
+    width:100%; max-width:430px; margin:0 12px 12px; background:rgba(0,0,0,0.7);
+    border:1px solid rgba(255,255,255,0.1); border-radius:20px; display:flex;
+    justify-content:space-between; align-items:flex-end; padding:10px 16px 8px; backdrop-filter: blur(12px);
+  }
+  .navitem { display:flex; flex-direction:column; align-items:center; gap:4px; font-size:10px; color:#64748b; background:none; border:none; cursor:pointer; }
+  .navitem.active { color:#22d3ee; }
+  .navcore {
+    width:54px; height:54px; margin-top:-24px; border-radius:50%;
+    background: linear-gradient(135deg,#2dd4bf,#22d3ee); display:flex; align-items:center; justify-content:center;
+    font-size:22px; cursor:pointer; border:none;
+  }
+  select, input.idfield { background:#0f172a; color:#fff; border:1px solid #334155; border-radius:8px; padding:6px 10px; font-size:12px; }
 </style>
 </head>
 <body>
-  <h1>💧 Water Management - HTTP Test Panel</h1>
+<div class="phone">
 
-  <div class="card">
-    <label>Apartment ID</label>
-    <input id="apartment" value="greenmeadows" />
-    <label>Floor</label>
-    <input id="floor" value="floor1" />
-    <label>Flat</label>
-    <input id="flat" value="101" />
-  </div>
+  <!-- HOME SCREEN -->
+  <div id="screen-home">
+    <div class="top">
+      <div class="row">
+        <div class="greet">
+          <div class="avatar">RM</div>
+          <div>
+            <div class="sub">Good Morning</div>
+            <div class="name">Naveen Kumar <span>· Flat 101</span></div>
+          </div>
+        </div>
+        <div style="font-size:20px;">🔔</div>
+      </div>
+      <div class="datebar">
+        <span id="dateNow">—</span>
+        <span>☀️ 31°C · Sunny</span>
+      </div>
+    </div>
 
-  <div class="card">
-    <button class="open" onclick="sendValve('OPEN')">Open Valve</button>
-    <button class="close" onclick="sendValve('CLOSE')">Close Valve</button>
-    <div id="valveResult" style="margin-top:10px;font-size:13px;"></div>
-    <div style="margin-top:8px;font-size:11px;color:#94a3b8;">
-      Note: ESP32 checks for commands every ~5-10 seconds, so it may take
-      a few seconds for the valve to respond after clicking.
+    <div class="px">
+      <div class="card">
+        <div class="row" style="margin-bottom:10px;">
+          <span style="font-size:13px;font-weight:600;color:#cbd5e1;">Live Flow</span>
+          <span id="valveBadge" class="badge off"><span class="dotpulse"></span> Valve Closed</span>
+        </div>
+        <div id="flowvis" class="flowvis">
+          <div class="pipe"></div>
+          <div class="pipe-glow"></div>
+          <div class="dot"></div>
+          <div class="dot"></div>
+          <div class="dot"></div>
+          <div class="val">
+            <b id="flowVal">0.0</b>
+            <small id="flowState">L/MIN · IDLE</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="stats">
+        <div class="card stat c"><b id="statToday">—</b><small>Total · L</small></div>
+        <div class="card stat"><b id="statLast">—</b><small>Last Reading · L/min</small></div>
+        <div class="card stat"><b id="statUpdated">—</b><small>Last Updated</small></div>
+      </div>
+
+      <div class="qa-title">Quick Actions</div>
+      <div class="qa-grid">
+        <div>
+          <div class="qa" id="btnOpen" onclick="sendValve('OPEN')">💧</div>
+          <div class="qa-label">Open Valve</div>
+        </div>
+        <div>
+          <div class="qa" id="btnClose" onclick="sendValve('CLOSE')">🚫</div>
+          <div class="qa-label">Close Valve</div>
+        </div>
+        <div>
+          <div class="qa">⚠️</div>
+          <div class="qa-label">Emergency</div>
+        </div>
+        <div>
+          <div class="qa">✈️</div>
+          <div class="qa-label">Vacation</div>
+        </div>
+      </div>
+      <div id="errBox" class="errbox hidden"></div>
     </div>
   </div>
 
-  <div class="card">
-    <button onclick="loadFlat()">Refresh Flat Data</button>
-    <pre id="flatData">No data yet.</pre>
+  <!-- ANALYTICS SCREEN -->
+  <div id="screen-analytics" class="hidden px" style="padding-top:24px;">
+    <h1 style="margin-bottom:16px;">Analytics</h1>
+    <div class="tabs">
+      <button class="tab active">Recent Readings</button>
+    </div>
+    <div class="card">
+      <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:6px;">Flow Rate History (L/min)</div>
+      <div class="bars" id="barsWrap"></div>
+      <div class="barlabels" id="barLabels"></div>
+    </div>
+    <div class="card" style="margin-top:12px;">
+      <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:6px;">Device Settings</div>
+      <label style="font-size:11px;color:#94a3b8;">Apartment</label><br/>
+      <input class="idfield" id="apartment" value="greenmeadows" style="width:100%;margin:4px 0 8px;"/><br/>
+      <label style="font-size:11px;color:#94a3b8;">Floor</label><br/>
+      <input class="idfield" id="floor" value="floor1" style="width:100%;margin:4px 0 8px;"/><br/>
+      <label style="font-size:11px;color:#94a3b8;">Flat</label><br/>
+      <input class="idfield" id="flat" value="101" style="width:100%;margin:4px 0;"/>
+    </div>
   </div>
 
-  <div class="card">
-    <button onclick="loadAllFlats()">Refresh All Flats (Admin view)</button>
-    <pre id="allFlats">No data yet.</pre>
+  <div class="navwrap">
+    <div class="nav">
+      <button class="navitem active" id="navHome" onclick="showScreen('home')">🏠<span>Home</span></button>
+      <button class="navitem" id="navAnalytics" onclick="showScreen('analytics')">📊<span>Analytics</span></button>
+      <button class="navcore" onclick="showScreen('home')">💧</button>
+      <button class="navitem" onclick="sendValve(currentValveOpen ? 'CLOSE' : 'OPEN')">⏻<span>Control</span></button>
+      <button class="navitem">👤<span>Profile</span></button>
+    </div>
   </div>
+</div>
 
 <script>
-  const API_BASE = "";
+  let currentValveOpen = false;
+  let autoRefreshTimer = null;
 
   function ids() {
     return {
@@ -58,30 +207,106 @@
     };
   }
 
+  function showScreen(name) {
+    document.getElementById('screen-home').classList.toggle('hidden', name !== 'home');
+    document.getElementById('screen-analytics').classList.toggle('hidden', name !== 'analytics');
+    document.getElementById('navHome').classList.toggle('active', name === 'home');
+    document.getElementById('navAnalytics').classList.toggle('active', name === 'analytics');
+    if (name === 'analytics') loadHistory();
+  }
+
   async function sendValve(action) {
     const { apartment, floor, flat } = ids();
-    const res = await fetch(`${API_BASE}/api/valve/${apartment}/${floor}/${flat}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action })
-    });
-    const data = await res.json();
-    document.getElementById('valveResult').textContent = JSON.stringify(data);
+    const errBox = document.getElementById('errBox');
+    errBox.classList.add('hidden');
+    try {
+      const res = await fetch(`/api/valve/${apartment}/${floor}/${flat}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action })
+      });
+      if (!res.ok) throw new Error('failed');
+      updateValveUI(action === 'OPEN');
+      errBox.textContent = 'Command sent — device checks every few seconds, so it may take a moment to respond.';
+      errBox.classList.remove('hidden');
+    } catch (e) {
+      errBox.textContent = 'Could not reach the server. Please try again.';
+      errBox.classList.remove('hidden');
+    }
   }
 
-  async function loadFlat() {
+  function updateValveUI(open) {
+    currentValveOpen = open;
+    const badge = document.getElementById('valveBadge');
+    const flowvis = document.getElementById('flowvis');
+    const flowVal = document.getElementById('flowVal');
+    const flowState = document.getElementById('flowState');
+    const btnOpen = document.getElementById('btnOpen');
+    const btnClose = document.getElementById('btnClose');
+
+    if (open) {
+      badge.className = 'badge on';
+      badge.innerHTML = '<span class="dotpulse"></span> Valve Open';
+      flowvis.classList.add('flowing');
+      flowState.textContent = 'L/MIN · FLOWING';
+      btnOpen.classList.add('active');
+      btnClose.classList.remove('active');
+    } else {
+      badge.className = 'badge off';
+      badge.innerHTML = '<span class="dotpulse" style="background:#64748b;"></span> Valve Closed';
+      flowvis.classList.remove('flowing');
+      flowVal.textContent = '0.0';
+      flowState.textContent = 'L/MIN · IDLE';
+      btnClose.classList.add('active');
+      btnOpen.classList.remove('active');
+    }
+  }
+
+  async function loadFlatData() {
     const { apartment, floor, flat } = ids();
-    const res = await fetch(`${API_BASE}/api/flats/${apartment}/${floor}/${flat}`);
-    const data = await res.json();
-    document.getElementById('flatData').textContent = JSON.stringify(data, null, 2);
+    try {
+      const res = await fetch(`/api/flats/${apartment}/${floor}/${flat}`);
+      const data = await res.json();
+      if (data.latest) {
+        const lpm = data.latest.flow_lpm || 0;
+        document.getElementById('flowVal').textContent = lpm.toFixed(1);
+        document.getElementById('statToday').textContent = (data.latest.total_liters || 0).toFixed(1);
+        document.getElementById('statLast').textContent = lpm.toFixed(1);
+        const t = data.latest.received_at ? new Date(data.latest.received_at) : null;
+        document.getElementById('statUpdated').textContent = t ? t.toLocaleTimeString() : '—';
+        updateValveUI(data.latest.valve_status === 'OPEN');
+      }
+    } catch (e) { /* silent */ }
   }
 
-  async function loadAllFlats() {
-    const res = await fetch(`${API_BASE}/api/flats`);
-    const data = await res.json();
-    document.getElementById('allFlats').textContent = JSON.stringify(data, null, 2);
+  async function loadHistory() {
+    const { apartment, floor, flat } = ids();
+    try {
+      const res = await fetch(`/api/flats/${apartment}/${floor}/${flat}`);
+      const data = await res.json();
+      const hist = (data.history || []).slice(-8);
+      const wrap = document.getElementById('barsWrap');
+      const labels = document.getElementById('barLabels');
+      wrap.innerHTML = ''; labels.innerHTML = '';
+      const max = Math.max(1, ...hist.map(h => h.flow_lpm || 0));
+      hist.forEach(h => {
+        const bar = document.createElement('div');
+        bar.className = 'bar';
+        bar.style.height = Math.max(2, ((h.flow_lpm || 0) / max) * 130) + 'px';
+        wrap.appendChild(bar);
+        const lab = document.createElement('span');
+        const t = h.received_at ? new Date(h.received_at) : null;
+        lab.textContent = t ? t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+        labels.appendChild(lab);
+      });
+      if (hist.length === 0) wrap.innerHTML = '<span style="font-size:12px;color:#64748b;">No readings yet.</span>';
+    } catch (e) { /* silent */ }
   }
+
+  document.getElementById('dateNow').textContent = new Date().toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  loadFlatData();
+  autoRefreshTimer = setInterval(loadFlatData, 8000);
 </script>
 </body>
 </html>
-
