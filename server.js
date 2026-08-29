@@ -179,9 +179,27 @@ app.get("/api/device/command/:apartment/:floor/:flat", (req, res) => {
 
 // ================= APP/DASHBOARD -> BACKEND (auth required) =================
 
-// Admin: get all flats' latest data
+// Admin: get all flats' latest data (includes limit + signed-up flat owner name)
 app.get("/api/flats", requireAuth, requireAdmin, (req, res) => {
-  res.json(Object.values(flatsData));
+  const keys = new Set([
+    ...Object.keys(flatsData),
+    ...Object.values(users).filter(u => u.role === "flat_owner").map(u => keyFor(u.apartment, u.floor, u.flat)),
+  ]);
+
+  const result = [...keys].map((key) => {
+    const owner = Object.values(users).find(
+      (u) => u.role === "flat_owner" && keyFor(u.apartment, u.floor, u.flat) === key
+    );
+    const [apartment, floor, flat] = key.split("/");
+    return {
+      apartment, floor, flat,
+      owner_name: owner ? owner.name : null,
+      ...flatsData[key],
+      limit: limits[key] || null,
+    };
+  });
+
+  res.json(result);
 });
 
 // Get one flat's data — flat owner can only view their own flat; admin can view any
