@@ -56,6 +56,8 @@ const invites = {};        // key: invite token -> { apartment, floor, flat, use
 const alertsSent = {};     // key: apartment/floor/flat -> { level80: bool, level100: bool }
 const notifications = {};  // key: apartment/floor/flat -> array of { level, message, timestamp }
 const adminNotifications = []; // flat-independent feed for admins
+const previousTotal = {};  // key -> last seen total_liters (to compute daily deltas)
+const dailyUsage = {};     // key -> { 'YYYY-MM-DD': liters }
 
 const MAX_HISTORY = 200;
 
@@ -244,25 +246,55 @@ app.post("/api/device/data/:apartment/:floor/:flat", (req, res) => {
   history[key].push(record);
   if (history[key].length > MAX_HISTORY) history[key].shift();
 
+  recordDailyUsage(key, record.total_liters);
   checkLimitAlerts(key, record);
 
   console.log(`Data from ${key}:`, record);
   res.json({ success: true });
 });
 
+function todayStr(date = new Date()) {
+  return date.toISOString().slice(0, 10); // YYYY-MM-DD (server/UTC based)
+}
+
+function recordDailyUsage(key, totalLiters) {
+  if (totalLiters == null) return;
+  const prev = previousTotal[key];
+  let delta;
+  if (prev == null || totalLiters < prev) {
+    // First reading ever, or device rebooted (counter reset) — treat current total as the delta
+    delta = totalLiters;
+  } else {
+    delta = totalLiters - prev;
+  }
+  previousTotal[key] = totalLiters;
+  if (delta <= 0) return;
+
+  if (!dailyUsage[key]) dailyUsage[key] = {};
+  const day = todayStr();
+  dailyUsage[key][day] = (dailyUsage[key][day] || 0) + delta;
+}
+
 function checkLimitAlerts(key, record) {
   const limit = limits[key];
-  if (!limit || !record.total_liters) return;
+  if (!limit) return;
+  const todaysUsage = (dailyUsage[key] && dailyUsage[key][todayStr()]) || 0;
+  if (!todaysUsage) return;
 
-  if (!alertsSent[key]) alertsSent[key] = { level80: false, level100: false };
-  const pct = record.total_liters / limit;
+  if (!alertsSent[key]) alertsSent[key] = { day: todayStr(), level80: false, level100: false };
+  // Reset alert flags if it's a new day
+  if (alertsSent[key].day !== todayStr()) {
+    alertsSent[key] = { day: todayStr(), level80: false, level100: false };
+  }
+
+  const pct = todaysUsage / limit;
   const [apartment, floor, flat] = key.split("/");
 
   if (pct >= 1 && !alertsSent[key].level100) {
-    pushNotification(key, "danger", `Flat ${flat} has reached 100% of its daily water limit (${record.total_liters.toFixed(1)}L of ${limit}L).`);
+    pushNotification(key, "danger", `Flat ${flat} has reached 100% of today's water limit (${todaysUsage.toFixed(1)}L of ${limit}L).`);
     alertsSent[key].level100 = true;
   } else if (pct >= 0.8 && !alertsSent[key].level80) {
-    pushNotification(key, "warning", `Flat ${flat} is at ${(pct * 100).toFixed(0)}% of its daily water limit (${record.total_liters.toFixed(1)}L of ${limit}L).`);
+    pushNotification(key, "warning", `Flat ${flat} is at ${(pct * 100).toFixed(0)}% of today's water limit (${todaysUsage.toFixed(1)}L of ${limit}L).`);
     alertsSent[key].level80 = true;
   }
 }
@@ -302,6 +334,7 @@ app.get("/api/flats", requireAuth, requireAdmin, (req, res) => {
       owner_name: owner ? owner.name : null,
       owner_phone: owner ? owner.phone : null,
       ...flatsData[key],
+      today_usage: (dailyUsage[key] && dailyUsage[key][todayStr()]) || 0,
       limit: limits[key] || null,
     };
   });
@@ -360,13 +393,27 @@ app.post("/api/valve/:apartment/:floor/:flat", requireAuth, (req, res) => {
   res.json({ success: true, apartment, floor, flat, action, delivered_instantly: !!(liveSocket && liveSocket.readyState === WebSocket.OPEN) });
 });
 
-// Admin: set a daily liter limit for a flat
+// Get date-wise water usage for a flat — flat owner sees own; admin sees any
+app.get("/api/usage/:apartment/:floor/:flat", requireAuth, (req, res) => {
+  const { apartment, floor, flat } = req.params;
+  const key = keyFor(apartment, floor, flat);
+
+  if (req.user.role !== "admin") {
+    const ownKey = keyFor(req.user.apartment, req.user.floor, req.user.flat);
+    if (ownKey !== key) return res.status(403).json({ error: "You can only view your own flat's usage" });
+  }
+
+  const usage = dailyUsage[key] || {};
+  // Return sorted array of { date, liters }, most recent last
+  const days = Object.keys(usage).sort().map((date) => ({ date, liters: usage[date] }));
+  res.json({ days, today: usage[todayStr()] || 0 });
+});
 app.post("/api/limits/:apartment/:floor/:flat", requireAuth, requireAdmin, (req, res) => {
   const { apartment, floor, flat } = req.params;
   const { daily_limit_liters } = req.body;
   const key = keyFor(apartment, floor, flat);
   limits[key] = daily_limit_liters;
-  alertsSent[key] = { level80: false, level100: false }; // reset alerts when limit changes
+  alertsSent[key] = { day: todayStr(), level80: false, level100: false }; // reset alerts when limit changes
   res.json({ success: true, key, daily_limit_liters });
 });
 
