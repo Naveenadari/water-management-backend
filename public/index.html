@@ -328,6 +328,10 @@
     authUser = user;
     localStorage.setItem('wm_token', token);
     localStorage.setItem('wm_user', JSON.stringify(user));
+    if (user.role === 'admin') {
+      window.location.href = '/admin.html';
+      return;
+    }
     enterApp();
   }
 
@@ -457,6 +461,10 @@
     const u = localStorage.getItem('wm_user');
     if (t && u) {
       authToken = t; authUser = JSON.parse(u);
+      if (authUser.role === 'admin') {
+        window.location.href = '/admin.html';
+        return;
+      }
       enterApp();
     }
   })();
