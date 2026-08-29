@@ -42,6 +42,8 @@
   .act.limit { background:#334155; color:#e2e8f0; }
   .limitInput { width:70px; background:#0f172a; border:1px solid #334155; color:#fff; border-radius:6px; padding:5px 7px; font-size:11px; }
   .empty { text-align:center; color:#64748b; padding:40px 0; font-size:13px; }
+  .errbox { font-size:12px; color:#fcd34d; background:rgba(251,191,36,0.1); border:1px solid rgba(251,191,36,0.3); border-radius:10px; padding:10px; }
+  .act.delete { background:#7f1d1d; color:#fecaca; }
   .refresh { background:none; border:1px solid #334155; color:#cbd5e1; border-radius:10px; padding:8px 14px; cursor:pointer; font-size:12px; }
   .toolbar { display:flex; gap:8px; margin-top:16px; }
 </style>
@@ -63,6 +65,38 @@
     <div class="card"><b id="statOver">—</b><small>Near/Over Limit</small></div>
   </div>
 
+  <div class="card" style="margin-top:8px;">
+    <div style="font-size:13px; font-weight:600; color:#fff; margin-bottom:10px;">➕ Invite a New Flat Owner</div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
+      <div>
+        <label style="font-size:11px;color:#94a3b8;">Apartment</label><br/>
+        <input class="limitInput" id="inviteApartment" value="greenmeadows" style="width:130px;" />
+      </div>
+      <div>
+        <label style="font-size:11px;color:#94a3b8;">Floor</label><br/>
+        <input class="limitInput" id="inviteFloor" value="floor1" style="width:90px;" />
+      </div>
+      <div>
+        <label style="font-size:11px;color:#94a3b8;">Flat No</label><br/>
+        <input class="limitInput" id="inviteFlat" placeholder="e.g. 102" style="width:90px;" />
+      </div>
+      <button class="act limit" style="padding:8px 14px;" onclick="createInvite()">Generate Link</button>
+    </div>
+    <div id="inviteResult" style="margin-top:10px; font-size:12px; display:none;">
+      <div style="color:#94a3b8; margin-bottom:4px;">Share this link with the flat owner (works once):</div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <input id="inviteLinkBox" readonly style="flex:1; background:#0f172a; border:1px solid #334155; color:#22d3ee; border-radius:8px; padding:8px; font-size:11px;" />
+        <button class="act limit" onclick="copyInviteLink()">Copy</button>
+      </div>
+    </div>
+    <div id="inviteError" class="errbox" style="display:none; margin-top:10px;"></div>
+  </div>
+
+  <div class="card" style="margin-top:8px;">
+    <div style="font-size:13px; font-weight:600; color:#fff; margin-bottom:8px;">🔔 Recent Alerts</div>
+    <div id="alertsList" style="font-size:12px; color:#94a3b8;">No alerts yet.</div>
+  </div>
+
   <div class="toolbar">
     <button class="refresh" onclick="loadFlats()">↻ Refresh</button>
   </div>
@@ -72,6 +106,7 @@
       <tr>
         <th>Flat</th>
         <th>Owner</th>
+        <th>Phone</th>
         <th>Flow</th>
         <th>Total (L)</th>
         <th>Limit</th>
@@ -81,7 +116,7 @@
     </thead>
     <tbody id="flatsBody"></tbody>
   </table>
-  <div id="emptyMsg" class="empty hidden">No flats yet. Flat owners will appear here once they sign up or send data.</div>
+  <div id="emptyMsg" class="empty hidden">No flats yet. Generate an invite link above to add your first flat owner.</div>
 </div>
 
 <script>
@@ -145,6 +180,7 @@
         tr.innerHTML = `
           <td><div class="flatname">Flat ${f.flat}</div><div class="flatsub">${f.apartment} · ${f.floor}</div></td>
           <td>${f.owner_name || '<span class="flatsub">Not signed up</span>'}</td>
+          <td>${f.owner_phone || '<span class="flatsub">—</span>'}</td>
           <td>${(f.flow_lpm || 0).toFixed(1)} L/min</td>
           <td>${total.toFixed(1)}</td>
           <td>
@@ -161,6 +197,9 @@
             <div class="btns">
               <button class="act open" onclick="controlValve('${f.apartment}','${f.floor}','${f.flat}','OPEN')">Open</button>
               <button class="act close" onclick="controlValve('${f.apartment}','${f.floor}','${f.flat}','CLOSE')">Close</button>
+            </div>
+            <div class="btns" style="margin-top:6px;">
+              <button class="act delete" onclick="deleteAccount('${f.apartment}','${f.floor}','${f.flat}')">Delete Account</button>
             </div>
           </td>
         `;
@@ -197,8 +236,65 @@
     } catch (e) { alert('Could not reach server.'); }
   }
 
+  async function createInvite() {
+    const apartment = document.getElementById('inviteApartment').value.trim();
+    const floor = document.getElementById('inviteFloor').value.trim();
+    const flat = document.getElementById('inviteFlat').value.trim();
+    const errBox = document.getElementById('inviteError');
+    const resultBox = document.getElementById('inviteResult');
+    errBox.style.display = 'none';
+    resultBox.style.display = 'none';
+
+    if (!apartment || !floor || !flat) { errBox.textContent = 'Please fill in apartment, floor and flat number.'; errBox.style.display = 'block'; return; }
+
+    try {
+      const res = await fetch('/api/invites', {
+        method: 'POST', headers: authHeaders(), body: JSON.stringify({ apartment, floor, flat })
+      });
+      const data = await res.json();
+      if (!res.ok) { errBox.textContent = data.error || 'Could not create invite.'; errBox.style.display = 'block'; return; }
+
+      const link = `${window.location.origin}/signup.html?invite=${data.token}`;
+      document.getElementById('inviteLinkBox').value = link;
+      resultBox.style.display = 'block';
+      document.getElementById('inviteFlat').value = '';
+    } catch (e) {
+      errBox.textContent = 'Could not reach the server.'; errBox.style.display = 'block';
+    }
+  }
+
+  function copyInviteLink() {
+    const box = document.getElementById('inviteLinkBox');
+    box.select();
+    document.execCommand('copy');
+  }
+
+  async function deleteAccount(apartment, floor, flat) {
+    if (!confirm(`Delete the account for Flat ${flat}? They will need a new invite link to sign up again.`)) return;
+    try {
+      await fetch(`/api/users/${apartment}/${floor}/${flat}`, { method: 'DELETE', headers: authHeaders() });
+      loadFlats();
+    } catch (e) { alert('Could not reach server.'); }
+  }
+
+  async function loadAlerts() {
+    try {
+      const res = await fetch('/api/notifications', { headers: authHeaders() });
+      const list = await res.json();
+      const box = document.getElementById('alertsList');
+      if (!list.length) { box.textContent = 'No alerts yet.'; return; }
+      box.innerHTML = list.slice(0, 8).map(n => {
+        const color = n.level === 'danger' ? '#fca5a5' : '#fcd34d';
+        const time = new Date(n.timestamp).toLocaleString();
+        return `<div style="padding:6px 0; border-bottom:1px solid #0f172a;"><span style="color:${color};">●</span> ${n.message} <span style="color:#64748b;">· ${time}</span></div>`;
+      }).join('');
+    } catch (e) { /* silent */ }
+  }
+
   loadFlats();
+  loadAlerts();
   setInterval(loadFlats, 10000);
+  setInterval(loadAlerts, 15000);
 </script>
 </body>
 </html>
