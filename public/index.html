@@ -18,6 +18,8 @@
   }
   .px { padding: 0 20px; }
   h1 { font-size: 20px; color: #fff; margin: 0; }
+  h2 { font-size: 22px; color: #fff; margin: 0 0 4px; }
+  p.sub2 { color: #94a3b8; font-size: 13px; margin: 0 0 24px; }
   .row { display: flex; align-items: center; justify-content: space-between; }
   .top { padding: 24px 20px 0; }
   .greet { display: flex; align-items: center; gap: 12px; }
@@ -68,6 +70,7 @@
   .qa.active { border-color: rgba(34,211,238,0.5); background: rgba(34,211,238,0.1); }
   .qa-label { font-size: 10px; text-align:center; color:#cbd5e1; margin-top:6px; }
   .errbox { margin-top:12px; font-size:12px; color:#fcd34d; background:rgba(251,191,36,0.1); border:1px solid rgba(251,191,36,0.3); border-radius:12px; padding:10px; }
+  .okbox { margin-top:12px; font-size:12px; color:#6ee7b7; background:rgba(52,211,153,0.1); border:1px solid rgba(52,211,153,0.3); border-radius:12px; padding:10px; }
   .tabs { display:flex; gap:8px; margin: 16px 0; }
   .tab { padding:6px 14px; border-radius:999px; font-size:12px; font-weight:600; background:rgba(255,255,255,0.05); color:#94a3b8; cursor:pointer; border:none; }
   .tab.active { background: linear-gradient(90deg,#2dd4bf,#22d3ee); color:#0f172a; }
@@ -90,23 +93,86 @@
     font-size:22px; cursor:pointer; border:none;
   }
   select, input.idfield { background:#0f172a; color:#fff; border:1px solid #334155; border-radius:8px; padding:6px 10px; font-size:12px; }
+
+  /* AUTH SCREENS */
+  .authwrap { min-height:100vh; display:flex; flex-direction:column; justify-content:center; padding: 20px; }
+  .droplogo { font-size:40px; text-align:center; margin-bottom:8px; }
+  .field { margin-bottom:14px; }
+  .field label { font-size:12px; color:#94a3b8; display:block; margin-bottom:6px; }
+  .field input, .field select {
+    width:100%; padding:12px 14px; border-radius:12px; border:1px solid #334155;
+    background:#0f172a; color:#fff; font-size:14px;
+  }
+  .btn-primary {
+    width:100%; padding:14px; border:none; border-radius:14px; font-weight:700; font-size:14px;
+    background: linear-gradient(90deg,#2dd4bf,#22d3ee); color:#0f172a; cursor:pointer; margin-top:6px;
+  }
+  .switchline { text-align:center; margin-top:16px; font-size:13px; color:#94a3b8; }
+  .switchline a { color:#22d3ee; text-decoration:none; font-weight:600; cursor:pointer; }
+  .roletoggle { display:flex; gap:8px; margin-bottom:16px; }
+  .roletoggle button {
+    flex:1; padding:10px; border-radius:12px; border:1px solid #334155; background:#0f172a;
+    color:#94a3b8; font-size:12px; font-weight:600; cursor:pointer;
+  }
+  .roletoggle button.active { background: linear-gradient(90deg,#2dd4bf,#22d3ee); color:#0f172a; border:none; }
 </style>
 </head>
 <body>
-<div class="phone">
 
-  <!-- HOME SCREEN -->
+<!-- ===================== AUTH SCREENS ===================== -->
+<div id="screen-auth" class="phone">
+  <div class="authwrap">
+    <div class="droplogo">💧</div>
+    <div id="authTitle" style="text-align:center;">
+      <h2>Welcome Back</h2>
+      <p class="sub2">Log in to monitor your water usage</p>
+    </div>
+
+    <div class="roletoggle">
+      <button id="roleFlatBtn" class="active" onclick="setRole('flat_owner')">Flat Owner</button>
+      <button id="roleAdminBtn" onclick="setRole('admin')">Admin</button>
+    </div>
+
+    <!-- LOGIN FORM -->
+    <div id="loginForm">
+      <div class="field"><label>Phone Number</label><input id="loginPhone" placeholder="10-digit mobile number" /></div>
+      <div class="field"><label>Password</label><input id="loginPassword" type="password" placeholder="Your password" /></div>
+      <button class="btn-primary" onclick="doLogin()">Log In</button>
+      <div class="switchline">New here? <a onclick="showSignup()">Create an account</a></div>
+    </div>
+
+    <!-- SIGNUP FORM -->
+    <div id="signupForm" class="hidden">
+      <div class="field"><label>Full Name</label><input id="suName" placeholder="Your name" /></div>
+      <div class="field"><label>Phone Number</label><input id="suPhone" placeholder="10-digit mobile number" /></div>
+      <div id="suFlatFields">
+        <div class="field"><label>Apartment ID</label><input id="suApartment" value="greenmeadows" /></div>
+        <div class="field"><label>Floor</label><input id="suFloor" value="floor1" /></div>
+        <div class="field"><label>Flat Number</label><input id="suFlat" placeholder="e.g. 101" /></div>
+      </div>
+      <div class="field"><label>Create Password</label><input id="suPassword" type="password" placeholder="At least 6 characters" /></div>
+      <button class="btn-primary" onclick="doSignup()">Create Account</button>
+      <div class="switchline">Already have an account? <a onclick="showLogin()">Log in</a></div>
+    </div>
+
+    <div id="authMsg" class="errbox hidden"></div>
+  </div>
+</div>
+
+<!-- ===================== FLAT OWNER APP ===================== -->
+<div id="screen-app" class="phone hidden">
+
   <div id="screen-home">
     <div class="top">
       <div class="row">
         <div class="greet">
-          <div class="avatar">NK</div>
+          <div class="avatar" id="avatarInit">--</div>
           <div>
-            <div class="sub">Good Morning</div>
-            <div class="name">Naveen Kumar <span>· Flat 101</span></div>
+            <div class="sub" id="greetLine">Good Morning</div>
+            <div class="name" id="nameLine">-- <span id="flatLine"></span></div>
           </div>
         </div>
-        <div style="font-size:20px;">🔔</div>
+        <div style="font-size:20px; cursor:pointer;" onclick="logout()">🚪</div>
       </div>
       <div class="datebar">
         <span id="dateNow">—</span>
@@ -162,25 +228,13 @@
     </div>
   </div>
 
-  <!-- ANALYTICS SCREEN -->
   <div id="screen-analytics" class="hidden px" style="padding-top:24px;">
     <h1 style="margin-bottom:16px;">Analytics</h1>
-    <div class="tabs">
-      <button class="tab active">Recent Readings</button>
-    </div>
+    <div class="tabs"><button class="tab active">Recent Readings</button></div>
     <div class="card">
       <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:6px;">Flow Rate History (L/min)</div>
       <div class="bars" id="barsWrap"></div>
       <div class="barlabels" id="barLabels"></div>
-    </div>
-    <div class="card" style="margin-top:12px;">
-      <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:6px;">Device Settings</div>
-      <label style="font-size:11px;color:#94a3b8;">Apartment</label><br/>
-      <input class="idfield" id="apartment" value="greenmeadows" style="width:100%;margin:4px 0 8px;"/><br/>
-      <label style="font-size:11px;color:#94a3b8;">Floor</label><br/>
-      <input class="idfield" id="floor" value="floor1" style="width:100%;margin:4px 0 8px;"/><br/>
-      <label style="font-size:11px;color:#94a3b8;">Flat</label><br/>
-      <input class="idfield" id="flat" value="101" style="width:100%;margin:4px 0;"/>
     </div>
   </div>
 
@@ -190,7 +244,7 @@
       <button class="navitem" id="navAnalytics" onclick="showScreen('analytics')">📊<span>Analytics</span></button>
       <button class="navcore" onclick="showScreen('home')">💧</button>
       <button class="navitem" onclick="sendValve(currentValveOpen ? 'CLOSE' : 'OPEN')">⏻<span>Control</span></button>
-      <button class="navitem">👤<span>Profile</span></button>
+      <button class="navitem" onclick="logout()">👤<span>Profile</span></button>
     </div>
   </div>
 </div>
@@ -198,15 +252,113 @@
 <script>
   let currentValveOpen = false;
   let autoRefreshTimer = null;
+  let selectedRole = 'flat_owner';
+  let authUser = null;
+  let authToken = null;
 
-  function ids() {
-    return {
-      apartment: document.getElementById('apartment').value.trim(),
-      floor: document.getElementById('floor').value.trim(),
-      flat: document.getElementById('flat').value.trim(),
-    };
+  // ---------------- AUTH UI ----------------
+  function setRole(role) {
+    selectedRole = role;
+    document.getElementById('roleFlatBtn').classList.toggle('active', role === 'flat_owner');
+    document.getElementById('roleAdminBtn').classList.toggle('active', role === 'admin');
+    document.getElementById('suFlatFields').classList.toggle('hidden', role === 'admin');
   }
 
+  function showSignup() {
+    document.getElementById('loginForm').classList.add('hidden');
+    document.getElementById('signupForm').classList.remove('hidden');
+    document.getElementById('authTitle').innerHTML = '<h2>Create Account</h2><p class="sub2">Set up your own login and password</p>';
+    hideAuthMsg();
+  }
+  function showLogin() {
+    document.getElementById('signupForm').classList.add('hidden');
+    document.getElementById('loginForm').classList.remove('hidden');
+    document.getElementById('authTitle').innerHTML = '<h2>Welcome Back</h2><p class="sub2">Log in to monitor your water usage</p>';
+    hideAuthMsg();
+  }
+  function showAuthMsg(text, ok) {
+    const box = document.getElementById('authMsg');
+    box.textContent = text;
+    box.className = ok ? 'okbox' : 'errbox';
+  }
+  function hideAuthMsg() {
+    document.getElementById('authMsg').className = 'errbox hidden';
+  }
+
+  async function doSignup() {
+    const name = document.getElementById('suName').value.trim();
+    const phone = document.getElementById('suPhone').value.trim();
+    const password = document.getElementById('suPassword').value;
+    const apartment = document.getElementById('suApartment').value.trim();
+    const floor = document.getElementById('suFloor').value.trim();
+    const flat = document.getElementById('suFlat').value.trim();
+
+    if (!name || !phone || !password) { showAuthMsg('Please fill in all fields.'); return; }
+    if (selectedRole === 'flat_owner' && (!apartment || !floor || !flat)) { showAuthMsg('Please fill in apartment/floor/flat.'); return; }
+
+    try {
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: selectedRole, name, phone, password, apartment, floor, flat })
+      });
+      const data = await res.json();
+      if (!res.ok) { showAuthMsg(data.error || 'Signup failed.'); return; }
+      loginSuccess(data.token, data.user);
+    } catch (e) { showAuthMsg('Could not reach the server.'); }
+  }
+
+  async function doLogin() {
+    const phone = document.getElementById('loginPhone').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    if (!phone || !password) { showAuthMsg('Please enter phone and password.'); return; }
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, password })
+      });
+      const data = await res.json();
+      if (!res.ok) { showAuthMsg(data.error || 'Login failed.'); return; }
+      loginSuccess(data.token, data.user);
+    } catch (e) { showAuthMsg('Could not reach the server.'); }
+  }
+
+  function loginSuccess(token, user) {
+    authToken = token;
+    authUser = user;
+    localStorage.setItem('wm_token', token);
+    localStorage.setItem('wm_user', JSON.stringify(user));
+    enterApp();
+  }
+
+  function logout() {
+    localStorage.removeItem('wm_token');
+    localStorage.removeItem('wm_user');
+    authToken = null; authUser = null;
+    if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+    document.getElementById('screen-app').classList.add('hidden');
+    document.getElementById('screen-auth').classList.remove('hidden');
+    showLogin();
+  }
+
+  function enterApp() {
+    document.getElementById('screen-auth').classList.add('hidden');
+    document.getElementById('screen-app').classList.remove('hidden');
+
+    const initials = (authUser.name || '?').split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase();
+    document.getElementById('avatarInit').textContent = initials;
+    document.getElementById('nameLine').innerHTML = authUser.name + ' <span id="flatLine">' +
+      (authUser.role === 'admin' ? '· Admin' : '· Flat ' + authUser.flat) + '</span>';
+
+    const hr = new Date().getHours();
+    document.getElementById('greetLine').textContent = hr < 12 ? 'Good Morning' : hr < 17 ? 'Good Afternoon' : 'Good Evening';
+
+    loadFlatData();
+    if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+    autoRefreshTimer = setInterval(loadFlatData, 8000);
+  }
+
+  // ---------------- APP UI ----------------
   function showScreen(name) {
     document.getElementById('screen-home').classList.toggle('hidden', name !== 'home');
     document.getElementById('screen-analytics').classList.toggle('hidden', name !== 'analytics');
@@ -215,15 +367,16 @@
     if (name === 'analytics') loadHistory();
   }
 
+  function authHeaders() {
+    return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken };
+  }
+
   async function sendValve(action) {
-    const { apartment, floor, flat } = ids();
     const errBox = document.getElementById('errBox');
     errBox.classList.add('hidden');
     try {
-      const res = await fetch(`/api/valve/${apartment}/${floor}/${flat}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action })
+      const res = await fetch(`/api/valve/${authUser.apartment}/${authUser.floor}/${authUser.flat}`, {
+        method: 'POST', headers: authHeaders(), body: JSON.stringify({ action })
       });
       if (!res.ok) throw new Error('failed');
       updateValveUI(action === 'OPEN');
@@ -245,27 +398,21 @@
     const btnClose = document.getElementById('btnClose');
 
     if (open) {
-      badge.className = 'badge on';
-      badge.innerHTML = '<span class="dotpulse"></span> Valve Open';
-      flowvis.classList.add('flowing');
-      flowState.textContent = 'L/MIN · FLOWING';
-      btnOpen.classList.add('active');
-      btnClose.classList.remove('active');
+      badge.className = 'badge on'; badge.innerHTML = '<span class="dotpulse"></span> Valve Open';
+      flowvis.classList.add('flowing'); flowState.textContent = 'L/MIN · FLOWING';
+      btnOpen.classList.add('active'); btnClose.classList.remove('active');
     } else {
-      badge.className = 'badge off';
-      badge.innerHTML = '<span class="dotpulse" style="background:#64748b;"></span> Valve Closed';
-      flowvis.classList.remove('flowing');
-      flowVal.textContent = '0.0';
-      flowState.textContent = 'L/MIN · IDLE';
-      btnClose.classList.add('active');
-      btnOpen.classList.remove('active');
+      badge.className = 'badge off'; badge.innerHTML = '<span class="dotpulse" style="background:#64748b;"></span> Valve Closed';
+      flowvis.classList.remove('flowing'); flowVal.textContent = '0.0'; flowState.textContent = 'L/MIN · IDLE';
+      btnClose.classList.add('active'); btnOpen.classList.remove('active');
     }
   }
 
   async function loadFlatData() {
-    const { apartment, floor, flat } = ids();
+    if (!authUser || authUser.role !== 'flat_owner') return;
     try {
-      const res = await fetch(`/api/flats/${apartment}/${floor}/${flat}`);
+      const res = await fetch(`/api/flats/${authUser.apartment}/${authUser.floor}/${authUser.flat}`, { headers: authHeaders() });
+      if (res.status === 401) { logout(); return; }
       const data = await res.json();
       if (data.latest) {
         const lpm = data.latest.flow_lpm || 0;
@@ -280,9 +427,8 @@
   }
 
   async function loadHistory() {
-    const { apartment, floor, flat } = ids();
     try {
-      const res = await fetch(`/api/flats/${apartment}/${floor}/${flat}`);
+      const res = await fetch(`/api/flats/${authUser.apartment}/${authUser.floor}/${authUser.flat}`, { headers: authHeaders() });
       const data = await res.json();
       const hist = (data.history || []).slice(-8);
       const wrap = document.getElementById('barsWrap');
@@ -305,8 +451,15 @@
 
   document.getElementById('dateNow').textContent = new Date().toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-  loadFlatData();
-  autoRefreshTimer = setInterval(loadFlatData, 8000);
+  // ---------------- AUTO LOGIN IF TOKEN EXISTS ----------------
+  (function tryAutoLogin() {
+    const t = localStorage.getItem('wm_token');
+    const u = localStorage.getItem('wm_user');
+    if (t && u) {
+      authToken = t; authUser = JSON.parse(u);
+      enterApp();
+    }
+  })();
 </script>
 </body>
 </html>
