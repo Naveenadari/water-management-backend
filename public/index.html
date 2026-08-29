@@ -128,30 +128,24 @@
       <p class="sub2">Log in to monitor your water usage</p>
     </div>
 
-    <div class="roletoggle">
-      <button id="roleFlatBtn" class="active" onclick="setRole('flat_owner')">Flat Owner</button>
-      <button id="roleAdminBtn" onclick="setRole('admin')">Admin</button>
-    </div>
-
     <!-- LOGIN FORM -->
     <div id="loginForm">
       <div class="field"><label>Phone Number</label><input id="loginPhone" placeholder="10-digit mobile number" /></div>
       <div class="field"><label>Password</label><input id="loginPassword" type="password" placeholder="Your password" /></div>
       <button class="btn-primary" onclick="doLogin()">Log In</button>
-      <div class="switchline">New here? <a onclick="showSignup()">Create an account</a></div>
+      <div class="switchline">Apartment Admin? <a onclick="showSignup()">Create an admin account</a></div>
+      <p style="text-align:center; font-size:11px; color:#64748b; margin-top:14px;">
+        Flat owners: please use the invite link shared by your apartment admin to sign up.
+      </p>
     </div>
 
-    <!-- SIGNUP FORM -->
+    <!-- ADMIN SIGNUP FORM -->
     <div id="signupForm" class="hidden">
       <div class="field"><label>Full Name</label><input id="suName" placeholder="Your name" /></div>
       <div class="field"><label>Phone Number</label><input id="suPhone" placeholder="10-digit mobile number" /></div>
-      <div id="suFlatFields">
-        <div class="field"><label>Apartment ID</label><input id="suApartment" value="greenmeadows" /></div>
-        <div class="field"><label>Floor</label><input id="suFloor" value="floor1" /></div>
-        <div class="field"><label>Flat Number</label><input id="suFlat" placeholder="e.g. 101" /></div>
-      </div>
       <div class="field"><label>Create Password</label><input id="suPassword" type="password" placeholder="At least 6 characters" /></div>
-      <button class="btn-primary" onclick="doSignup()">Create Account</button>
+      <div class="field"><label>Re-enter Password</label><input id="suPassword2" type="password" placeholder="Re-enter your password" /></div>
+      <button class="btn-primary" onclick="doSignup()">Create Admin Account</button>
       <div class="switchline">Already have an account? <a onclick="showLogin()">Log in</a></div>
     </div>
 
@@ -225,6 +219,7 @@
         </div>
       </div>
       <div id="errBox" class="errbox hidden"></div>
+      <div id="alertBanner" class="errbox hidden" style="margin-top:10px;"></div>
     </div>
   </div>
 
@@ -252,22 +247,14 @@
 <script>
   let currentValveOpen = false;
   let autoRefreshTimer = null;
-  let selectedRole = 'flat_owner';
   let authUser = null;
   let authToken = null;
 
   // ---------------- AUTH UI ----------------
-  function setRole(role) {
-    selectedRole = role;
-    document.getElementById('roleFlatBtn').classList.toggle('active', role === 'flat_owner');
-    document.getElementById('roleAdminBtn').classList.toggle('active', role === 'admin');
-    document.getElementById('suFlatFields').classList.toggle('hidden', role === 'admin');
-  }
-
   function showSignup() {
     document.getElementById('loginForm').classList.add('hidden');
     document.getElementById('signupForm').classList.remove('hidden');
-    document.getElementById('authTitle').innerHTML = '<h2>Create Account</h2><p class="sub2">Set up your own login and password</p>';
+    document.getElementById('authTitle').innerHTML = '<h2>Create Admin Account</h2><p class="sub2">Set up your own login and password</p>';
     hideAuthMsg();
   }
   function showLogin() {
@@ -289,17 +276,16 @@
     const name = document.getElementById('suName').value.trim();
     const phone = document.getElementById('suPhone').value.trim();
     const password = document.getElementById('suPassword').value;
-    const apartment = document.getElementById('suApartment').value.trim();
-    const floor = document.getElementById('suFloor').value.trim();
-    const flat = document.getElementById('suFlat').value.trim();
+    const password2 = document.getElementById('suPassword2').value;
 
     if (!name || !phone || !password) { showAuthMsg('Please fill in all fields.'); return; }
-    if (selectedRole === 'flat_owner' && (!apartment || !floor || !flat)) { showAuthMsg('Please fill in apartment/floor/flat.'); return; }
+    if (password.length < 6) { showAuthMsg('Password must be at least 6 characters.'); return; }
+    if (password !== password2) { showAuthMsg('Passwords do not match.'); return; }
 
     try {
       const res = await fetch('/api/auth/signup', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: selectedRole, name, phone, password, apartment, floor, flat })
+        body: JSON.stringify({ role: 'admin', name, phone, password })
       });
       const data = await res.json();
       if (!res.ok) { showAuthMsg(data.error || 'Signup failed.'); return; }
@@ -358,8 +344,25 @@
     document.getElementById('greetLine').textContent = hr < 12 ? 'Good Morning' : hr < 17 ? 'Good Afternoon' : 'Good Evening';
 
     loadFlatData();
+    loadAlerts();
     if (autoRefreshTimer) clearInterval(autoRefreshTimer);
-    autoRefreshTimer = setInterval(loadFlatData, 8000);
+    autoRefreshTimer = setInterval(() => { loadFlatData(); loadAlerts(); }, 8000);
+  }
+
+  async function loadAlerts() {
+    if (!authUser || authUser.role !== 'flat_owner') return;
+    try {
+      const res = await fetch('/api/notifications', { headers: authHeaders() });
+      const list = await res.json();
+      const banner = document.getElementById('alertBanner');
+      if (list && list.length > 0) {
+        const latest = list[0];
+        banner.textContent = '🔔 ' + latest.message;
+        banner.classList.remove('hidden');
+      } else {
+        banner.classList.add('hidden');
+      }
+    } catch (e) { /* silent */ }
   }
 
   // ---------------- APP UI ----------------
