@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Admin - Water Management</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, Arial, sans-serif;
+    background: #020617; color: #e2e8f0; min-height:100vh;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 24px 18px 60px; }
+  .row { display:flex; align-items:center; justify-content:space-between; }
+  h1 { font-size: 22px; color:#fff; margin:0; }
+  .sub { font-size:12px; color:#94a3b8; }
+  .logout { background:none; border:1px solid #334155; color:#cbd5e1; border-radius:10px; padding:8px 14px; cursor:pointer; font-size:12px; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin:20px 0; }
+  .card {
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px; padding: 16px;
+  }
+  .card b { font-size:24px; color:#22d3ee; display:block; }
+  .card small { font-size:11px; color:#94a3b8; }
+  table { width:100%; border-collapse: collapse; margin-top:10px; }
+  th { text-align:left; font-size:11px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #1e293b; }
+  td { padding:10px; font-size:13px; border-bottom:1px solid #0f172a; vertical-align:middle; }
+  tr:hover { background: rgba(255,255,255,0.02); }
+  .flatname { color:#fff; font-weight:600; }
+  .flatsub { color:#64748b; font-size:11px; }
+  .badge { font-size:10px; font-weight:700; padding:3px 9px; border-radius:999px; }
+  .badge.open { color:#6ee7b7; background:rgba(52,211,153,0.12); }
+  .badge.closed { color:#94a3b8; background:rgba(255,255,255,0.06); }
+  .badge.warn { color:#fcd34d; background:rgba(251,191,36,0.12); }
+  .badge.danger { color:#fca5a5; background:rgba(248,113,113,0.12); }
+  .btns { display:flex; gap:6px; flex-wrap:wrap; }
+  button.act {
+    border:none; border-radius:8px; padding:6px 10px; font-size:11px; font-weight:700; cursor:pointer;
+  }
+  .act.open { background:#2dd4bf; color:#0f172a; }
+  .act.close { background:#f87171; color:#0f172a; }
+  .act.limit { background:#334155; color:#e2e8f0; }
+  .limitInput { width:70px; background:#0f172a; border:1px solid #334155; color:#fff; border-radius:6px; padding:5px 7px; font-size:11px; }
+  .empty { text-align:center; color:#64748b; padding:40px 0; font-size:13px; }
+  .refresh { background:none; border:1px solid #334155; color:#cbd5e1; border-radius:10px; padding:8px 14px; cursor:pointer; font-size:12px; }
+  .toolbar { display:flex; gap:8px; margin-top:16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="row">
+    <div>
+      <h1>💧 Admin Dashboard</h1>
+      <div class="sub" id="adminName">—</div>
+    </div>
+    <button class="logout" onclick="logout()">Logout</button>
+  </div>
+
+  <div class="stats">
+    <div class="card"><b id="statFlats">—</b><small>Total Flats</small></div>
+    <div class="card"><b id="statOpen">—</b><small>Valves Open</small></div>
+    <div class="card"><b id="statTotal">—</b><small>Total Liters (all time)</small></div>
+    <div class="card"><b id="statOver">—</b><small>Near/Over Limit</small></div>
+  </div>
+
+  <div class="toolbar">
+    <button class="refresh" onclick="loadFlats()">↻ Refresh</button>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Flat</th>
+        <th>Owner</th>
+        <th>Flow</th>
+        <th>Total (L)</th>
+        <th>Limit</th>
+        <th>Valve</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="flatsBody"></tbody>
+  </table>
+  <div id="emptyMsg" class="empty hidden">No flats yet. Flat owners will appear here once they sign up or send data.</div>
+</div>
+
+<script>
+  const token = localStorage.getItem('wm_token');
+  const userRaw = localStorage.getItem('wm_user');
+
+  if (!token || !userRaw) {
+    window.location.href = '/';
+  }
+  const user = JSON.parse(userRaw || '{}');
+  if (user.role !== 'admin') {
+    window.location.href = '/';
+  }
+
+  document.getElementById('adminName').textContent = 'Logged in as ' + user.name;
+
+  function authHeaders() {
+    return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token };
+  }
+
+  function logout() {
+    localStorage.removeItem('wm_token');
+    localStorage.removeItem('wm_user');
+    window.location.href = '/';
+  }
+
+  function limitBadge(flat) {
+    if (!flat.limit || !flat.total_liters) return '<span class="badge closed">No limit set</span>';
+    const pct = (flat.total_liters / flat.limit) * 100;
+    if (pct >= 100) return `<span class="badge danger">${pct.toFixed(0)}% (over)</span>`;
+    if (pct >= 80) return `<span class="badge warn">${pct.toFixed(0)}%</span>`;
+    return `<span class="badge open">${pct.toFixed(0)}%</span>`;
+  }
+
+  async function loadFlats() {
+    try {
+      const res = await fetch('/api/flats', { headers: authHeaders() });
+      if (res.status === 401 || res.status === 403) { logout(); return; }
+      const flats = await res.json();
+
+      const tbody = document.getElementById('flatsBody');
+      const emptyMsg = document.getElementById('emptyMsg');
+      tbody.innerHTML = '';
+
+      if (flats.length === 0) {
+        emptyMsg.classList.remove('hidden');
+      } else {
+        emptyMsg.classList.add('hidden');
+      }
+
+      let openCount = 0, totalAll = 0, overCount = 0;
+
+      flats.forEach(f => {
+        const isOpen = f.valve_status === 'OPEN';
+        if (isOpen) openCount++;
+        const total = f.total_liters || 0;
+        totalAll += total;
+        if (f.limit && total / f.limit >= 0.8) overCount++;
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><div class="flatname">Flat ${f.flat}</div><div class="flatsub">${f.apartment} · ${f.floor}</div></td>
+          <td>${f.owner_name || '<span class="flatsub">Not signed up</span>'}</td>
+          <td>${(f.flow_lpm || 0).toFixed(1)} L/min</td>
+          <td>${total.toFixed(1)}</td>
+          <td>
+            <div class="btns">
+              ${limitBadge(f)}
+            </div>
+            <div class="btns" style="margin-top:6px;">
+              <input class="limitInput" type="number" placeholder="Liters/day" id="limit-${f.apartment}-${f.floor}-${f.flat}" value="${f.limit || ''}" />
+              <button class="act limit" onclick="setLimit('${f.apartment}','${f.floor}','${f.flat}')">Set</button>
+            </div>
+          </td>
+          <td><span class="badge ${isOpen ? 'open' : 'closed'}">${isOpen ? 'Open' : 'Closed'}</span></td>
+          <td>
+            <div class="btns">
+              <button class="act open" onclick="controlValve('${f.apartment}','${f.floor}','${f.flat}','OPEN')">Open</button>
+              <button class="act close" onclick="controlValve('${f.apartment}','${f.floor}','${f.flat}','CLOSE')">Close</button>
+            </div>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      document.getElementById('statFlats').textContent = flats.length;
+      document.getElementById('statOpen').textContent = openCount;
+      document.getElementById('statTotal').textContent = totalAll.toFixed(0);
+      document.getElementById('statOver').textContent = overCount;
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function controlValve(apartment, floor, flat, action) {
+    try {
+      await fetch(`/api/valve/${apartment}/${floor}/${flat}`, {
+        method: 'POST', headers: authHeaders(), body: JSON.stringify({ action })
+      });
+      setTimeout(loadFlats, 800);
+    } catch (e) { alert('Could not reach server.'); }
+  }
+
+  async function setLimit(apartment, floor, flat) {
+    const input = document.getElementById(`limit-${apartment}-${floor}-${flat}`);
+    const value = parseFloat(input.value);
+    if (!value || value <= 0) { alert('Enter a valid liters/day limit.'); return; }
+    try {
+      await fetch(`/api/limits/${apartment}/${floor}/${flat}`, {
+        method: 'POST', headers: authHeaders(), body: JSON.stringify({ daily_limit_liters: value })
+      });
+      loadFlats();
+    } catch (e) { alert('Could not reach server.'); }
+  }
+
+  loadFlats();
+  setInterval(loadFlats, 10000);
+</script>
+</body>
+</html>
