@@ -5,6 +5,8 @@
 const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
+const http = require("http");
+const WebSocket = require("ws");
 
 const app = express();
 app.use(cors());
@@ -12,6 +14,34 @@ app.use(express.json());
 app.use(express.static("public"));
 
 const PORT = process.env.PORT || 3000;
+
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server, path: "/device-ws" });
+
+// key: apartment/floor/flat -> live WebSocket connection for that ESP32
+const deviceSockets = {};
+
+wss.on("connection", (ws) => {
+  let deviceKey = null;
+
+  ws.on("message", (raw) => {
+    let msg;
+    try { msg = JSON.parse(raw); } catch (e) { return; }
+
+    if (msg.type === "register") {
+      deviceKey = keyFor(msg.apartment, msg.floor, msg.flat);
+      deviceSockets[deviceKey] = ws;
+      console.log(`Device connected via WebSocket: ${deviceKey}`);
+    }
+  });
+
+  ws.on("close", () => {
+    if (deviceKey && deviceSockets[deviceKey] === ws) {
+      delete deviceSockets[deviceKey];
+      console.log(`Device disconnected: ${deviceKey}`);
+    }
+  });
+});
 
 // ---------------- IN-MEMORY DATA STORE ----------------
 // NOTE: This resets whenever the server restarts (e.g. free-tier sleep).
@@ -190,9 +220,19 @@ app.post("/api/valve/:apartment/:floor/:flat", requireAuth, (req, res) => {
     return res.status(400).json({ error: "action must be OPEN or CLOSE" });
   }
 
+  // Instant delivery if the ESP32 has an active WebSocket connection
+  const liveSocket = deviceSockets[key];
+  if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
+    liveSocket.send(JSON.stringify({ command: action }));
+    console.log(`Command sent INSTANTLY via WebSocket to ${key}: ${action}`);
+  } else {
+    console.log(`Device ${key} not connected via WebSocket — queuing for next poll`);
+  }
+
+  // Always also queue it, as a fallback in case the push is missed
   pendingCommands[key] = action;
   console.log(`Command queued for ${key}: ${action} (by ${req.user.role} ${req.user.name})`);
-  res.json({ success: true, apartment, floor, flat, action });
+  res.json({ success: true, apartment, floor, flat, action, delivered_instantly: !!(liveSocket && liveSocket.readyState === WebSocket.OPEN) });
 });
 
 // Admin: set a daily liter limit for a flat
@@ -205,6 +245,6 @@ app.post("/api/limits/:apartment/:floor/:flat", requireAuth, requireAdmin, (req,
 });
 
 // ---------------- START SERVER ----------------
-app.listen(PORT, () => {
-  console.log(`Backend (HTTP + Auth) running on port ${PORT}`);
+server.listen(PORT, () => {
+  console.log(`Backend (HTTP + WebSocket + Auth) running on port ${PORT}`);
 });
