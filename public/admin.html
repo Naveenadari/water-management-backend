@@ -108,6 +108,7 @@
         <th>Owner</th>
         <th>Phone</th>
         <th>Flow</th>
+        <th>Today (L)</th>
         <th>Total (L)</th>
         <th>Limit</th>
         <th>Valve</th>
@@ -144,8 +145,9 @@
   }
 
   function limitBadge(flat) {
-    if (!flat.limit || !flat.total_liters) return '<span class="badge closed">No limit set</span>';
-    const pct = (flat.total_liters / flat.limit) * 100;
+    if (!flat.limit) return '<span class="badge closed">No limit set</span>';
+    const usage = flat.today_usage || 0;
+    const pct = (usage / flat.limit) * 100;
     if (pct >= 100) return `<span class="badge danger">${pct.toFixed(0)}% (over)</span>`;
     if (pct >= 80) return `<span class="badge warn">${pct.toFixed(0)}%</span>`;
     return `<span class="badge open">${pct.toFixed(0)}%</span>`;
@@ -174,7 +176,7 @@
         if (isOpen) openCount++;
         const total = f.total_liters || 0;
         totalAll += total;
-        if (f.limit && total / f.limit >= 0.8) overCount++;
+        if (f.limit && (f.today_usage || 0) / f.limit >= 0.8) overCount++;
 
         const tr = document.createElement('tr');
         tr.innerHTML = `
@@ -182,6 +184,7 @@
           <td>${f.owner_name || '<span class="flatsub">Not signed up</span>'}</td>
           <td>${f.owner_phone || '<span class="flatsub">—</span>'}</td>
           <td>${(f.flow_lpm || 0).toFixed(1)} L/min</td>
+          <td>${(f.today_usage || 0).toFixed(1)}</td>
           <td>${total.toFixed(1)}</td>
           <td>
             <div class="btns">
