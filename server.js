@@ -19,7 +19,7 @@ const PORT = process.env.PORT || 3000;
 // ---------------- PAYMENT CONFIG ----------------
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || "";
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || "";
-const SUBSCRIPTION_AMOUNT_PAISE = parseInt(process.env.SUBSCRIPTION_AMOUNT_PAISE || "1000", 10); // default ₹99.00
+const SUBSCRIPTION_AMOUNT_PAISE = parseInt(process.env.SUBSCRIPTION_AMOUNT_PAISE || "0000", 10); // default ₹99.00
 const SUBSCRIPTION_DAYS = 30;
 
 let razorpay = null;
