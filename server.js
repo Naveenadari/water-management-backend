@@ -7,6 +7,7 @@ const cors = require("cors");
 const crypto = require("crypto");
 const http = require("http");
 const WebSocket = require("ws");
+const Razorpay = require("razorpay");
 
 const app = express();
 app.use(cors());
@@ -14,6 +15,25 @@ app.use(express.json());
 app.use(express.static("public"));
 
 const PORT = process.env.PORT || 3000;
+
+// ---------------- PAYMENT CONFIG ----------------
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || "";
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || "";
+const SUBSCRIPTION_AMOUNT_PAISE = parseInt(process.env.SUBSCRIPTION_AMOUNT_PAISE || "9900", 10); // default ₹99.00
+const SUBSCRIPTION_DAYS = 30;
+
+let razorpay = null;
+if (RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET) {
+  razorpay = new Razorpay({ key_id: RAZORPAY_KEY_ID, key_secret: RAZORPAY_KEY_SECRET });
+}
+
+const subscriptions = {}; // key -> { paidUntil: ISOString }
+
+function isSubscriptionActive(key) {
+  const sub = subscriptions[key];
+  if (!sub || !sub.paidUntil) return false;
+  return new Date(sub.paidUntil) > new Date();
+}
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server, path: "/device-ws" });
@@ -183,6 +203,27 @@ app.post("/api/auth/signup-with-invite", (req, res) => {
   res.json({ success: true, token: authToken, user: safeUser });
 });
 
+// Admin resets a flat owner's password (generates a new temporary password to share manually)
+app.post("/api/users/:apartment/:floor/:flat/reset-password", requireAuth, requireAdmin, (req, res) => {
+  const { apartment, floor, flat } = req.params;
+  const key = keyFor(apartment, floor, flat);
+
+  const phone = Object.keys(users).find(
+    (p) => users[p].role === "flat_owner" && keyFor(users[p].apartment, users[p].floor, users[p].flat) === key
+  );
+  if (!phone) return res.status(404).json({ error: "No account found for this flat" });
+
+  const newPassword = crypto.randomBytes(4).toString("hex"); // e.g. "a1b2c3d4"
+  const salt = crypto.randomBytes(16).toString("hex");
+  users[phone].salt = salt;
+  users[phone].passwordHash = hashPassword(newPassword, salt);
+
+  // Invalidate old sessions for this user, forcing re-login with the new password
+  Object.keys(sessions).forEach((t) => { if (sessions[t] === phone) delete sessions[t]; });
+
+  res.json({ success: true, phone, newPassword });
+});
+
 // Admin deletes a flat owner's account (frees up the flat for a new invite)
 app.delete("/api/users/:apartment/:floor/:flat", requireAuth, requireAdmin, (req, res) => {
   const { apartment, floor, flat } = req.params;
@@ -329,12 +370,19 @@ app.get("/api/flats", requireAuth, requireAdmin, (req, res) => {
       (u) => u.role === "flat_owner" && keyFor(u.apartment, u.floor, u.flat) === key
     );
     const [apartment, floor, flat] = key.split("/");
+    const active = isSubscriptionActive(key);
+
     return {
       apartment, floor, flat,
       owner_name: owner ? owner.name : null,
       owner_phone: owner ? owner.phone : null,
-      ...flatsData[key],
-      today_usage: (dailyUsage[key] && dailyUsage[key][todayStr()]) || 0,
+      valve_status: (flatsData[key] && flatsData[key].valve_status) || null,
+      subscription_active: active,
+      // Usage numbers are hidden until the flat owner's monthly subscription is paid,
+      // even though the readings are still being recorded in the background.
+      flow_lpm: active ? (flatsData[key] && flatsData[key].flow_lpm) || 0 : null,
+      total_liters: active ? (flatsData[key] && flatsData[key].total_liters) || 0 : null,
+      today_usage: active ? ((dailyUsage[key] && dailyUsage[key][todayStr()]) || 0) : null,
       limit: limits[key] || null,
     };
   });
@@ -354,9 +402,12 @@ app.get("/api/flats/:apartment/:floor/:flat", requireAuth, (req, res) => {
     }
   }
 
+  const active = isSubscriptionActive(key);
+
   res.json({
-    latest: flatsData[key] || null,
-    history: history[key] || [],
+    subscription_active: active,
+    latest: active ? (flatsData[key] || null) : null,
+    history: active ? (history[key] || []) : [],
     limit: limits[key] || null,
   });
 });
@@ -403,10 +454,142 @@ app.get("/api/usage/:apartment/:floor/:flat", requireAuth, (req, res) => {
     if (ownKey !== key) return res.status(403).json({ error: "You can only view your own flat's usage" });
   }
 
+  const active = isSubscriptionActive(key);
+  if (!active) {
+    return res.json({ subscription_active: false, days: [], today: 0 });
+  }
+
   const usage = dailyUsage[key] || {};
   // Return sorted array of { date, liters }, most recent last
   const days = Object.keys(usage).sort().map((date) => ({ date, liters: usage[date] }));
-  res.json({ days, today: usage[todayStr()] || 0 });
+  res.json({ subscription_active: true, days, today: usage[todayStr()] || 0 });
+});
+
+// ---------------- PAYMENT (RAZORPAY) ----------------
+
+// Basic config info (subscription price) for UI display
+app.get("/api/config", requireAuth, (req, res) => {
+  res.json({ subscription_amount_paise: SUBSCRIPTION_AMOUNT_PAISE });
+});
+
+// Get current subscription status for a flat
+app.get("/api/subscription/:apartment/:floor/:flat", requireAuth, (req, res) => {
+  const { apartment, floor, flat } = req.params;
+  const key = keyFor(apartment, floor, flat);
+
+  if (req.user.role !== "admin") {
+    const ownKey = keyFor(req.user.apartment, req.user.floor, req.user.flat);
+    if (ownKey !== key) return res.status(403).json({ error: "You can only view your own subscription" });
+  }
+
+  res.json({
+    active: isSubscriptionActive(key),
+    paid_until: (subscriptions[key] && subscriptions[key].paidUntil) || null,
+    amount_paise: SUBSCRIPTION_AMOUNT_PAISE,
+  });
+});
+
+// Flat owner starts a payment — creates a Razorpay order
+app.post("/api/payment/create-order", requireAuth, async (req, res) => {
+  if (req.user.role !== "flat_owner") return res.status(403).json({ error: "Only flat owners can pay their subscription" });
+  if (!razorpay) return res.status(500).json({ error: "Payment gateway is not configured yet. Please contact your admin." });
+
+  const key = keyFor(req.user.apartment, req.user.floor, req.user.flat);
+  try {
+    const order = await razorpay.orders.create({
+      amount: SUBSCRIPTION_AMOUNT_PAISE,
+      currency: "INR",
+      receipt: `sub_${key.replace(/\//g, "_")}_${Date.now()}`,
+      notes: { apartment: req.user.apartment, floor: req.user.floor, flat: req.user.flat },
+    });
+    res.json({ order_id: order.id, amount: order.amount, currency: order.currency, key_id: RAZORPAY_KEY_ID });
+  } catch (e) {
+    console.error("Razorpay order creation failed:", e);
+    res.status(500).json({ error: "Could not create payment order" });
+  }
+});
+
+// Admin pays subscription on behalf of one or more selected flats — creates a combined order
+const pendingAdminOrders = {}; // order_id -> array of flat keys
+
+app.post("/api/payment/admin/create-order", requireAuth, requireAdmin, async (req, res) => {
+  if (!razorpay) return res.status(500).json({ error: "Payment gateway is not configured yet." });
+
+  const { flats } = req.body; // [{ apartment, floor, flat }, ...]
+  if (!Array.isArray(flats) || flats.length === 0) {
+    return res.status(400).json({ error: "Select at least one flat to pay for" });
+  }
+
+  const keys = flats.map((f) => keyFor(f.apartment, f.floor, f.flat));
+  const amount = SUBSCRIPTION_AMOUNT_PAISE * keys.length;
+
+  try {
+    const order = await razorpay.orders.create({
+      amount,
+      currency: "INR",
+      receipt: `admin_bulk_${Date.now()}`,
+      notes: { flats: keys.join(",") },
+    });
+    pendingAdminOrders[order.id] = keys;
+    res.json({ order_id: order.id, amount: order.amount, currency: order.currency, key_id: RAZORPAY_KEY_ID, flat_count: keys.length });
+  } catch (e) {
+    console.error("Razorpay admin order creation failed:", e);
+    res.status(500).json({ error: "Could not create payment order" });
+  }
+});
+
+app.post("/api/payment/admin/verify", requireAuth, requireAdmin, (req, res) => {
+  const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+    return res.status(400).json({ error: "Missing payment verification fields" });
+  }
+
+  const expectedSignature = crypto
+    .createHmac("sha256", RAZORPAY_KEY_SECRET)
+    .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+    .digest("hex");
+
+  if (expectedSignature !== razorpay_signature) {
+    return res.status(400).json({ error: "Payment verification failed" });
+  }
+
+  const keys = pendingAdminOrders[razorpay_order_id];
+  if (!keys) return res.status(404).json({ error: "Order not found" });
+
+  const paidUntil = new Date(Date.now() + SUBSCRIPTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  keys.forEach((key) => {
+    subscriptions[key] = { paidUntil };
+    console.log(`Subscription activated (by admin) for ${key} until ${paidUntil}`);
+  });
+  delete pendingAdminOrders[razorpay_order_id];
+
+  res.json({ success: true, flats_paid: keys, paid_until: paidUntil });
+});
+
+// Flat owner completes payment — verify signature and activate subscription for 30 days
+app.post("/api/payment/verify", requireAuth, (req, res) => {
+  if (req.user.role !== "flat_owner") return res.status(403).json({ error: "Only flat owners can pay their subscription" });
+
+  const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+    return res.status(400).json({ error: "Missing payment verification fields" });
+  }
+
+  const expectedSignature = crypto
+    .createHmac("sha256", RAZORPAY_KEY_SECRET)
+    .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+    .digest("hex");
+
+  if (expectedSignature !== razorpay_signature) {
+    return res.status(400).json({ error: "Payment verification failed" });
+  }
+
+  const key = keyFor(req.user.apartment, req.user.floor, req.user.flat);
+  const paidUntil = new Date(Date.now() + SUBSCRIPTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  subscriptions[key] = { paidUntil };
+
+  console.log(`Subscription activated for ${key} until ${paidUntil}`);
+  res.json({ success: true, paid_until: paidUntil });
 });
 app.post("/api/limits/:apartment/:floor/:flat", requireAuth, requireAdmin, (req, res) => {
   const { apartment, floor, flat } = req.params;
