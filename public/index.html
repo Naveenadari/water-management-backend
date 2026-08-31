@@ -4,6 +4,13 @@
 <meta charset="UTF-8" />
 <title>Water Management</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="manifest" href="/manifest.json" />
+<link rel="icon" href="/icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="/icon.svg" />
+<meta name="theme-color" content="#0f172a" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Water" />
 <style>
   * { box-sizing: border-box; }
   body {
@@ -94,6 +101,25 @@
   }
   select, input.idfield { background:#0f172a; color:#fff; border:1px solid #334155; border-radius:8px; padding:6px 10px; font-size:12px; }
 
+  /* PAYWALL */
+  .blurred { filter: blur(10px); pointer-events: none; user-select: none; }
+  .paywall-overlay {
+    position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center;
+    background: rgba(2,6,23,0.55);
+  }
+  .paywall-card {
+    width: 90%; max-width: 340px; background: #0f172a; border: 1px solid rgba(34,211,238,0.35);
+    border-radius: 20px; padding: 26px 22px; text-align: center;
+  }
+  .paywall-card .icon { font-size: 34px; margin-bottom: 10px; }
+  .paywall-card h3 { color:#fff; margin:0 0 6px; font-size:18px; }
+  .paywall-card p { color:#94a3b8; font-size:13px; margin:0 0 18px; }
+  .paywall-amount { color:#22d3ee; font-size:26px; font-weight:800; margin-bottom:18px; }
+  .paynow-btn {
+    width:100%; padding:14px; border:none; border-radius:14px; font-weight:700; font-size:14px;
+    background: linear-gradient(90deg,#2dd4bf,#22d3ee); color:#0f172a; cursor:pointer;
+  }
+
   /* AUTH SCREENS */
   .authwrap { min-height:100vh; display:flex; flex-direction:column; justify-content:center; padding: 20px; }
   .droplogo { font-size:40px; text-align:center; margin-bottom:8px; }
@@ -116,6 +142,7 @@
   }
   .roletoggle button.active { background: linear-gradient(90deg,#2dd4bf,#22d3ee); color:#0f172a; border:none; }
 </style>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 </head>
 <body>
 
@@ -156,6 +183,7 @@
 <!-- ===================== FLAT OWNER APP ===================== -->
 <div id="screen-app" class="phone hidden">
 
+  <div id="appContent">
   <div id="screen-home">
     <div class="top">
       <div class="row">
@@ -249,6 +277,18 @@
       <button class="navcore" onclick="showScreen('home')">💧</button>
       <button class="navitem" onclick="sendValve(currentValveOpen ? 'CLOSE' : 'OPEN')">⏻<span>Control</span></button>
       <button class="navitem" onclick="logout()">👤<span>Profile</span></button>
+    </div>
+  </div>
+  </div><!-- /appContent -->
+
+  <div id="paywallOverlay" class="paywall-overlay hidden">
+    <div class="paywall-card">
+      <div class="icon">🔒</div>
+      <h3>Subscription Required</h3>
+      <p>Pay your monthly subscription to view your water usage and history. Your usage is still being recorded in the background.</p>
+      <div class="paywall-amount" id="paywallAmount">₹—</div>
+      <button class="paynow-btn" onclick="startPayment()">Pay Now</button>
+      <div id="paywallMsg" style="margin-top:12px; font-size:12px; color:#fcd34d;"></div>
     </div>
   </div>
 </div>
@@ -354,8 +394,70 @@
 
     loadFlatData();
     loadAlerts();
+    checkSubscription();
     if (autoRefreshTimer) clearInterval(autoRefreshTimer);
     autoRefreshTimer = setInterval(() => { loadFlatData(); loadAlerts(); }, 8000);
+  }
+
+  // ---------------- PAYMENT / SUBSCRIPTION ----------------
+  async function checkSubscription() {
+    try {
+      const res = await fetch(`/api/subscription/${authUser.apartment}/${authUser.floor}/${authUser.flat}`, { headers: authHeaders() });
+      const data = await res.json();
+      const overlay = document.getElementById('paywallOverlay');
+      const content = document.getElementById('appContent');
+
+      if (data.active) {
+        overlay.classList.add('hidden');
+        content.classList.remove('blurred');
+      } else {
+        document.getElementById('paywallAmount').textContent = '₹' + (data.amount_paise / 100).toFixed(0) + ' / month';
+        overlay.classList.remove('hidden');
+        content.classList.add('blurred');
+      }
+    } catch (e) { /* silent */ }
+  }
+
+  async function startPayment() {
+    const msgBox = document.getElementById('paywallMsg');
+    msgBox.textContent = 'Opening secure payment...';
+    try {
+      const res = await fetch('/api/payment/create-order', { method: 'POST', headers: authHeaders() });
+      const order = await res.json();
+      if (!res.ok) { msgBox.textContent = order.error || 'Could not start payment.'; return; }
+
+      const options = {
+        key: order.key_id,
+        amount: order.amount,
+        currency: order.currency,
+        name: 'Water Management',
+        description: 'Monthly Subscription - Flat ' + authUser.flat,
+        order_id: order.order_id,
+        handler: async function (response) {
+          msgBox.textContent = 'Verifying payment...';
+          try {
+            const verifyRes = await fetch('/api/payment/verify', {
+              method: 'POST', headers: authHeaders(), body: JSON.stringify(response)
+            });
+            const verifyData = await verifyRes.json();
+            if (verifyRes.ok) {
+              msgBox.textContent = '';
+              checkSubscription();
+              loadFlatData();
+            } else {
+              msgBox.textContent = verifyData.error || 'Payment verification failed.';
+            }
+          } catch (e) { msgBox.textContent = 'Could not verify payment.'; }
+        },
+        theme: { color: '#22d3ee' },
+        modal: { ondismiss: function () { msgBox.textContent = ''; } }
+      };
+
+      const rzp = new Razorpay(options);
+      rzp.open();
+    } catch (e) {
+      msgBox.textContent = 'Could not reach the server.';
+    }
   }
 
   async function loadAlerts() {
@@ -533,6 +635,11 @@
       enterApp();
     }
   })();
+
+  // ---------------- REGISTER SERVICE WORKER (PWA) ----------------
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
 </script>
 </body>
 </html>
