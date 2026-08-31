@@ -4,6 +4,13 @@
 <meta charset="UTF-8" />
 <title>Admin - Water Management</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="manifest" href="/admin-manifest.json" />
+<link rel="icon" href="/icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="/icon.svg" />
+<meta name="theme-color" content="#0f172a" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Water Admin" />
 <style>
   * { box-sizing: border-box; }
   body {
@@ -47,6 +54,7 @@
   .refresh { background:none; border:1px solid #334155; color:#cbd5e1; border-radius:10px; padding:8px 14px; cursor:pointer; font-size:12px; }
   .toolbar { display:flex; gap:8px; margin-top:16px; }
 </style>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -97,16 +105,19 @@
     <div id="alertsList" style="font-size:12px; color:#94a3b8;">No alerts yet.</div>
   </div>
 
-  <div class="toolbar">
+  <div class="toolbar" style="align-items:center; justify-content:space-between;">
     <button class="refresh" onclick="loadFlats()">↻ Refresh</button>
+    <button class="act limit" id="paySelectedBtn" style="display:none;" onclick="paySelected()">Pay Selected (₹0)</button>
   </div>
 
   <table>
     <thead>
       <tr>
+        <th></th>
         <th>Flat</th>
         <th>Owner</th>
         <th>Phone</th>
+        <th>Payment</th>
         <th>Flow</th>
         <th>Today (L)</th>
         <th>Total (L)</th>
@@ -174,21 +185,26 @@
       flats.forEach(f => {
         const isOpen = f.valve_status === 'OPEN';
         if (isOpen) openCount++;
-        const total = f.total_liters || 0;
-        totalAll += total;
-        if (f.limit && (f.today_usage || 0) / f.limit >= 0.8) overCount++;
+        const paid = f.subscription_active;
+        const total = paid ? (f.total_liters || 0) : 0;
+        if (paid) totalAll += total;
+        if (paid && f.limit && (f.today_usage || 0) / f.limit >= 0.8) overCount++;
+
+        const locked = '<span class="flatsub">🔒 Payment pending</span>';
 
         const tr = document.createElement('tr');
         tr.innerHTML = `
+          <td>${paid ? '' : `<input type="checkbox" class="payCheckbox" data-key="${f.apartment}|${f.floor}|${f.flat}" onchange="updatePaySelected()" />`}</td>
           <td><div class="flatname">Flat ${f.flat}</div><div class="flatsub">${f.apartment} · ${f.floor}</div></td>
           <td>${f.owner_name || '<span class="flatsub">Not signed up</span>'}</td>
           <td>${f.owner_phone || '<span class="flatsub">—</span>'}</td>
-          <td>${(f.flow_lpm || 0).toFixed(1)} L/min</td>
-          <td>${(f.today_usage || 0).toFixed(1)}</td>
-          <td>${total.toFixed(1)}</td>
+          <td>${paid ? `<span class="badge open">Paid</span>` : `<span class="badge warn">Pending</span>`}</td>
+          <td>${paid ? (f.flow_lpm || 0).toFixed(1) + ' L/min' : locked}</td>
+          <td>${paid ? (f.today_usage || 0).toFixed(1) : locked}</td>
+          <td>${paid ? total.toFixed(1) : locked}</td>
           <td>
             <div class="btns">
-              ${limitBadge(f)}
+              ${paid ? limitBadge(f) : locked}
             </div>
             <div class="btns" style="margin-top:6px;">
               <input class="limitInput" type="number" placeholder="Liters/day" id="limit-${f.apartment}-${f.floor}-${f.flat}" value="${f.limit || ''}" />
@@ -202,7 +218,8 @@
               <button class="act close" onclick="controlValve('${f.apartment}','${f.floor}','${f.flat}','CLOSE')">Close</button>
             </div>
             <div class="btns" style="margin-top:6px;">
-              <button class="act delete" onclick="deleteAccount('${f.apartment}','${f.floor}','${f.flat}')">Delete Account</button>
+              <button class="act limit" onclick="resetPassword('${f.apartment}','${f.floor}','${f.flat}')">Reset Password</button>
+              <button class="act delete" onclick="deleteAccount('${f.apartment}','${f.floor}','${f.flat}')">Delete</button>
             </div>
           </td>
         `;
@@ -213,6 +230,7 @@
       document.getElementById('statOpen').textContent = openCount;
       document.getElementById('statTotal').textContent = totalAll.toFixed(0);
       document.getElementById('statOver').textContent = overCount;
+      updatePaySelected();
     } catch (e) {
       console.error(e);
     }
@@ -272,6 +290,16 @@
     document.execCommand('copy');
   }
 
+  async function resetPassword(apartment, floor, flat) {
+    if (!confirm(`Reset the password for Flat ${flat}? A new temporary password will be generated.`)) return;
+    try {
+      const res = await fetch(`/api/users/${apartment}/${floor}/${flat}/reset-password`, { method: 'POST', headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error || 'Could not reset password.'); return; }
+      alert(`New password for Flat ${flat} (phone ${data.phone}):\n\n${data.newPassword}\n\nShare this with the flat owner. They can log in and it will keep working until you reset it again.`);
+    } catch (e) { alert('Could not reach server.'); }
+  }
+
   async function deleteAccount(apartment, floor, flat) {
     if (!confirm(`Delete the account for Flat ${flat}? They will need a new invite link to sign up again.`)) return;
     try {
@@ -294,10 +322,77 @@
     } catch (e) { /* silent */ }
   }
 
+  let subscriptionAmountPaise = 9900;
+  fetch('/api/config', { headers: authHeaders() }).then(r => r.json()).then(d => { subscriptionAmountPaise = d.subscription_amount_paise; updatePaySelected(); }).catch(() => {});
+
+  function updatePaySelected() {
+    const boxes = document.querySelectorAll('.payCheckbox:checked');
+    const btn = document.getElementById('paySelectedBtn');
+    if (boxes.length === 0) {
+      btn.style.display = 'none';
+      return;
+    }
+    const amount = (subscriptionAmountPaise * boxes.length) / 100;
+    btn.textContent = `Pay Selected (₹${amount.toFixed(0)}) — ${boxes.length} flat(s)`;
+    btn.style.display = 'inline-block';
+  }
+
+  async function paySelected() {
+    const boxes = [...document.querySelectorAll('.payCheckbox:checked')];
+    if (boxes.length === 0) return;
+
+    const flats = boxes.map(b => {
+      const [apartment, floor, flat] = b.dataset.key.split('|');
+      return { apartment, floor, flat };
+    });
+
+    try {
+      const res = await fetch('/api/payment/admin/create-order', {
+        method: 'POST', headers: authHeaders(), body: JSON.stringify({ flats })
+      });
+      const order = await res.json();
+      if (!res.ok) { alert(order.error || 'Could not start payment.'); return; }
+
+      const options = {
+        key: order.key_id,
+        amount: order.amount,
+        currency: order.currency,
+        name: 'Water Management',
+        description: `Subscription payment for ${order.flat_count} flat(s)`,
+        order_id: order.order_id,
+        handler: async function (response) {
+          try {
+            const verifyRes = await fetch('/api/payment/admin/verify', {
+              method: 'POST', headers: authHeaders(), body: JSON.stringify(response)
+            });
+            const verifyData = await verifyRes.json();
+            if (verifyRes.ok) {
+              alert(`Payment successful for ${verifyData.flats_paid.length} flat(s).`);
+              loadFlats();
+            } else {
+              alert(verifyData.error || 'Payment verification failed.');
+            }
+          } catch (e) { alert('Could not verify payment.'); }
+        },
+        theme: { color: '#22d3ee' },
+      };
+
+      const rzp = new Razorpay(options);
+      rzp.open();
+    } catch (e) {
+      alert('Could not reach the server.');
+    }
+  }
+
   loadFlats();
   loadAlerts();
   setInterval(loadFlats, 10000);
   setInterval(loadAlerts, 15000);
+
+  // ---------------- REGISTER SERVICE WORKER (PWA) ----------------
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
 </script>
 </body>
 </html>
