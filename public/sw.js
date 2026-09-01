@@ -1,5 +1,5 @@
-const CACHE_NAME = "water-mgmt-v1";
-const SHELL_FILES = ["/", "/admin.html", "/icon.svg"];
+const CACHE_NAME = "water-mgmt-v2";
+const SHELL_FILES = ["/icon.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -17,7 +17,9 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Network-first for API calls (always want fresh data), cache-first for the app shell
+// Network-first for everything except a couple of static assets — this app relies on
+// always showing fresh data (subscription status, valve state), so we never want to
+// serve a stale cached HTML/JS page.
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
@@ -25,7 +27,21 @@ self.addEventListener("fetch", (event) => {
     return; // let these pass through to the network untouched
   }
 
+  if (url.pathname === "/icon.svg") {
+    event.respondWith(
+      caches.match(event.request).then((cached) => cached || fetch(event.request))
+    );
+    return;
+  }
+
+  // Network-first: always try the network for fresh HTML/JS, fall back to cache only if offline
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    fetch(event.request)
+      .then((response) => {
+        const clone = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        return response;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
