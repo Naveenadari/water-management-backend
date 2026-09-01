@@ -396,7 +396,7 @@
     loadAlerts();
     checkSubscription();
     if (autoRefreshTimer) clearInterval(autoRefreshTimer);
-    autoRefreshTimer = setInterval(() => { loadFlatData(); loadAlerts(); }, 8000);
+    autoRefreshTimer = setInterval(() => { loadFlatData(); loadAlerts(); checkSubscription(); }, 8000);
   }
 
   // ---------------- PAYMENT / SUBSCRIPTION ----------------
