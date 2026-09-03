@@ -63,7 +63,10 @@
       <h1>💧 Admin Dashboard</h1>
       <div class="sub" id="adminName">—</div>
     </div>
-    <button class="logout" onclick="logout()">Logout</button>
+    <div style="display:flex; gap:8px;">
+      <button class="logout hidden" id="installBtn" onclick="installApp()">📲 Install App</button>
+      <button class="logout" onclick="logout()">Logout</button>
+    </div>
   </div>
 
   <div class="stats">
@@ -71,6 +74,19 @@
     <div class="card"><b id="statOpen">—</b><small>Valves Open</small></div>
     <div class="card"><b id="statTotal">—</b><small>Total Liters (all time)</small></div>
     <div class="card"><b id="statOver">—</b><small>Near/Over Limit</small></div>
+  </div>
+
+  <div id="superAdminCard" class="card hidden" style="margin-top:8px; border-color:rgba(251,191,36,0.4);">
+    <div style="font-size:13px; font-weight:600; color:#fcd34d; margin-bottom:10px;">👑 Invite a New Apartment Admin</div>
+    <button class="act limit" onclick="createAdminInvite()">Generate Admin Invite Link</button>
+    <div id="adminInviteResult" style="margin-top:10px; font-size:12px; display:none;">
+      <div style="color:#94a3b8; margin-bottom:4px;">Share this link with the new admin (works once):</div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <input id="adminInviteLinkBox" readonly style="flex:1; background:#0f172a; border:1px solid #334155; color:#fcd34d; border-radius:8px; padding:8px; font-size:11px;" />
+        <button class="act limit" onclick="copyAdminInviteLink()">Copy</button>
+      </div>
+    </div>
+    <div id="adminInviteError" class="errbox" style="display:none; margin-top:10px;"></div>
   </div>
 
   <div class="card" style="margin-top:8px;">
@@ -139,11 +155,41 @@
     window.location.href = '/';
   }
   const user = JSON.parse(userRaw || '{}');
-  if (user.role !== 'admin') {
+  if (user.role !== 'admin' && user.role !== 'super_admin') {
     window.location.href = '/';
   }
 
-  document.getElementById('adminName').textContent = 'Logged in as ' + user.name;
+  document.getElementById('adminName').textContent = 'Logged in as ' + user.name + (user.role === 'super_admin' ? ' (Super Admin)' : '');
+
+  if (user.role === 'super_admin') {
+    document.getElementById('superAdminCard').classList.remove('hidden');
+  }
+
+  async function createAdminInvite() {
+    const errBox = document.getElementById('adminInviteError');
+    const resultBox = document.getElementById('adminInviteResult');
+    errBox.style.display = 'none';
+    resultBox.style.display = 'none';
+
+    try {
+      const res = await fetch('/api/admin-invites', { method: 'POST', headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok) { errBox.textContent = data.error || 'Could not create invite.'; errBox.style.display = 'block'; return; }
+
+      const link = `${window.location.origin}/admin-signup.html?invite=${data.token}`;
+      document.getElementById('adminInviteLinkBox').value = link;
+      resultBox.style.display = 'block';
+    } catch (e) {
+      errBox.textContent = 'Could not reach the server.'; errBox.style.display = 'block';
+    }
+  }
+
+  function copyAdminInviteLink() {
+    const box = document.getElementById('adminInviteLinkBox');
+    box.select();
+    document.execCommand('copy');
+  }
+
 
   function authHeaders() {
     return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token };
@@ -388,6 +434,20 @@
   loadAlerts();
   setInterval(loadFlats, 10000);
   setInterval(loadAlerts, 15000);
+
+  // ---------------- PWA INSTALL PROMPT ----------------
+  let deferredInstallPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    document.getElementById('installBtn').classList.remove('hidden');
+  });
+  function installApp() {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    deferredInstallPrompt = null;
+    document.getElementById('installBtn').classList.add('hidden');
+  }
 
   // ---------------- REGISTER SERVICE WORKER (PWA) ----------------
   if ('serviceWorker' in navigator) {
