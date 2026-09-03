@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Create Super Admin - Water Management</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system, Arial, sans-serif; background:#020617; color:#e2e8f0; display:flex; justify-content:center; }
+  .wrap { width:100%; max-width:430px; min-height:100vh; padding:40px 20px; }
+  .droplogo { font-size:40px; text-align:center; margin-bottom:8px; }
+  h2 { text-align:center; margin:0 0 4px; color:#fff; }
+  p.sub { text-align:center; color:#94a3b8; font-size:13px; margin:0 0 24px; }
+  .warnbox {
+    background:rgba(251,191,36,0.08); border:1px solid rgba(251,191,36,0.3); border-radius:14px;
+    padding:12px 14px; margin-bottom:22px; font-size:12px; color:#fcd34d;
+  }
+  .field { margin-bottom:14px; }
+  .field label { font-size:12px; color:#94a3b8; display:block; margin-bottom:6px; }
+  .field input {
+    width:100%; padding:12px 14px; border-radius:12px; border:1px solid #334155;
+    background:#0f172a; color:#fff; font-size:14px;
+  }
+  .btn-primary {
+    width:100%; padding:14px; border:none; border-radius:14px; font-weight:700; font-size:14px;
+    background:linear-gradient(90deg,#2dd4bf,#22d3ee); color:#0f172a; cursor:pointer; margin-top:6px;
+  }
+  .errbox { margin-top:14px; font-size:12px; color:#fcd34d; background:rgba(251,191,36,0.1); border:1px solid rgba(251,191,36,0.3); border-radius:12px; padding:10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="droplogo">👑</div>
+  <h2>Create Super Admin</h2>
+  <p class="sub">One-time setup — only works if no super admin exists yet</p>
+
+  <div class="warnbox">
+    This is the top-level account that can invite apartment admins. Keep this page's URL
+    private — do not share it. After you create your account, this page will refuse to
+    create another one.
+  </div>
+
+  <div class="field"><label>Bootstrap Key</label><input id="bootstrapKey" type="password" placeholder="Secret key from your environment variables" /></div>
+  <div class="field"><label>Your Full Name</label><input id="name" placeholder="Your name" /></div>
+  <div class="field"><label>Phone Number (this will be your username)</label><input id="phone" placeholder="10-digit mobile number" /></div>
+  <div class="field"><label>Create Password</label><input id="password" type="password" placeholder="At least 6 characters" /></div>
+  <div class="field"><label>Re-enter Password</label><input id="password2" type="password" placeholder="Re-enter your password" /></div>
+
+  <button class="btn-primary" onclick="submitBootstrap()">Create Super Admin Account</button>
+  <div id="errBox" class="errbox" style="display:none;"></div>
+</div>
+
+<script>
+  function showErr(msg) {
+    const box = document.getElementById('errBox');
+    box.textContent = msg;
+    box.style.display = 'block';
+  }
+
+  async function submitBootstrap() {
+    const bootstrap_key = document.getElementById('bootstrapKey').value.trim();
+    const name = document.getElementById('name').value.trim();
+    const phone = document.getElementById('phone').value.trim();
+    const password = document.getElementById('password').value;
+    const password2 = document.getElementById('password2').value;
+
+    document.getElementById('errBox').style.display = 'none';
+
+    if (!bootstrap_key || !name || !phone || !password) { showErr('Please fill in all fields.'); return; }
+    if (password.length < 6) { showErr('Password must be at least 6 characters.'); return; }
+    if (password !== password2) { showErr('Passwords do not match.'); return; }
+
+    try {
+      const res = await fetch('/api/auth/bootstrap-superadmin', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bootstrap_key, name, phone, password })
+      });
+      const data = await res.json();
+      if (!res.ok) { showErr(data.error || 'Could not create super admin account.'); return; }
+
+      localStorage.setItem('wm_token', data.token);
+      localStorage.setItem('wm_user', JSON.stringify(data.user));
+      window.location.href = '/admin.html';
+    } catch (e) {
+      showErr('Could not reach the server. Please try again.');
+    }
+  }
+</script>
+</body>
+</html>
