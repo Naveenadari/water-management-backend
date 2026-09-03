@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Join as Apartment Admin - Water Management</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="manifest" href="/admin-manifest.json" />
+<link rel="icon" href="/icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="/icon.svg" />
+<meta name="theme-color" content="#0f172a" />
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system, Arial, sans-serif; background:#020617; color:#e2e8f0; display:flex; justify-content:center; }
+  .wrap { width:100%; max-width:430px; min-height:100vh; padding:40px 20px; }
+  .droplogo { font-size:40px; text-align:center; margin-bottom:8px; }
+  h2 { text-align:center; margin:0 0 4px; color:#fff; }
+  p.sub { text-align:center; color:#94a3b8; font-size:13px; margin:0 0 24px; }
+  .badgebox {
+    background:rgba(34,211,238,0.08); border:1px solid rgba(34,211,238,0.3); border-radius:14px;
+    padding:14px; margin-bottom:22px; text-align:center; color:#22d3ee; font-weight:700;
+  }
+  .field { margin-bottom:14px; }
+  .field label { font-size:12px; color:#94a3b8; display:block; margin-bottom:6px; }
+  .field input {
+    width:100%; padding:12px 14px; border-radius:12px; border:1px solid #334155;
+    background:#0f172a; color:#fff; font-size:14px;
+  }
+  .btn-primary {
+    width:100%; padding:14px; border:none; border-radius:14px; font-weight:700; font-size:14px;
+    background:linear-gradient(90deg,#2dd4bf,#22d3ee); color:#0f172a; cursor:pointer; margin-top:6px;
+  }
+  .errbox { margin-top:14px; font-size:12px; color:#fcd34d; background:rgba(251,191,36,0.1); border:1px solid rgba(251,191,36,0.3); border-radius:12px; padding:10px; }
+  .loading { text-align:center; color:#94a3b8; padding:60px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="droplogo">💧</div>
+
+  <div id="loadingBox" class="loading">Checking invite link…</div>
+
+  <div id="formBox" style="display:none;">
+    <h2>Join as Apartment Admin</h2>
+    <p class="sub">Set up your own login to manage your apartment's water system</p>
+    <div class="badgebox">🔑 Admin Account Invite</div>
+
+    <div class="field"><label>Your Full Name</label><input id="name" placeholder="e.g. Naveen Kumar" /></div>
+    <div class="field"><label>Phone Number (this will be your username)</label><input id="phone" placeholder="10-digit mobile number" /></div>
+    <div class="field"><label>Create Password</label><input id="password" type="password" placeholder="At least 6 characters" /></div>
+    <div class="field"><label>Re-enter Password</label><input id="password2" type="password" placeholder="Re-enter your password" /></div>
+
+    <button class="btn-primary" onclick="submitSignup()">Create My Admin Account</button>
+    <div id="errBox" class="errbox" style="display:none;"></div>
+  </div>
+
+  <div id="invalidBox" style="display:none; text-align:center; color:#fca5a5; padding:60px 0;"></div>
+</div>
+
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const inviteToken = params.get('invite');
+
+  async function loadInvite() {
+    if (!inviteToken) {
+      showInvalid('No invite link found. Please ask your super admin for your invite link.');
+      return;
+    }
+    try {
+      const res = await fetch(`/api/admin-invites/${inviteToken}`);
+      const data = await res.json();
+      if (!res.ok) { showInvalid(data.error || 'This invite link is invalid or already used.'); return; }
+
+      document.getElementById('loadingBox').style.display = 'none';
+      document.getElementById('formBox').style.display = 'block';
+    } catch (e) {
+      showInvalid('Could not reach the server. Please try again.');
+    }
+  }
+
+  function showInvalid(msg) {
+    document.getElementById('loadingBox').style.display = 'none';
+    const box = document.getElementById('invalidBox');
+    box.textContent = msg;
+    box.style.display = 'block';
+  }
+
+  function showErr(msg) {
+    const box = document.getElementById('errBox');
+    box.textContent = msg;
+    box.style.display = 'block';
+  }
+
+  async function submitSignup() {
+    const name = document.getElementById('name').value.trim();
+    const phone = document.getElementById('phone').value.trim();
+    const password = document.getElementById('password').value;
+    const password2 = document.getElementById('password2').value;
+
+    document.getElementById('errBox').style.display = 'none';
+
+    if (!name || !phone || !password) { showErr('Please fill in all fields.'); return; }
+    if (password.length < 6) { showErr('Password must be at least 6 characters.'); return; }
+    if (password !== password2) { showErr('Passwords do not match.'); return; }
+
+    try {
+      const res = await fetch('/api/auth/admin-signup-with-invite', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: inviteToken, name, phone, password })
+      });
+      const data = await res.json();
+      if (!res.ok) { showErr(data.error || 'Signup failed.'); return; }
+
+      localStorage.setItem('wm_token', data.token);
+      localStorage.setItem('wm_user', JSON.stringify(data.user));
+      window.location.href = '/admin.html';
+    } catch (e) {
+      showErr('Could not reach the server. Please try again.');
+    }
+  }
+
+  loadInvite();
+</script>
+</body>
+</html>
