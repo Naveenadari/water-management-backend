@@ -161,20 +161,10 @@
       <div class="field"><label>Phone Number</label><input id="loginPhone" placeholder="10-digit mobile number" /></div>
       <div class="field"><label>Password</label><input id="loginPassword" type="password" placeholder="Your password" /></div>
       <button class="btn-primary" onclick="doLogin()">Log In</button>
-      <div class="switchline">Apartment Admin? <a onclick="showSignup()">Create an admin account</a></div>
       <p style="text-align:center; font-size:11px; color:#64748b; margin-top:14px;">
-        Flat owners: please use the invite link shared by your apartment admin to sign up.
+        Flat owners: use the invite link shared by your apartment admin to sign up.<br/><br/>
+        Apartment admins: use the invite link shared by the super admin to sign up.
       </p>
-    </div>
-
-    <!-- ADMIN SIGNUP FORM -->
-    <div id="signupForm" class="hidden">
-      <div class="field"><label>Full Name</label><input id="suName" placeholder="Your name" /></div>
-      <div class="field"><label>Phone Number</label><input id="suPhone" placeholder="10-digit mobile number" /></div>
-      <div class="field"><label>Create Password</label><input id="suPassword" type="password" placeholder="At least 6 characters" /></div>
-      <div class="field"><label>Re-enter Password</label><input id="suPassword2" type="password" placeholder="Re-enter your password" /></div>
-      <button class="btn-primary" onclick="doSignup()">Create Admin Account</button>
-      <div class="switchline">Already have an account? <a onclick="showLogin()">Log in</a></div>
     </div>
 
     <div id="authMsg" class="errbox hidden"></div>
@@ -195,7 +185,10 @@
             <div class="name" id="nameLine">-- <span id="flatLine"></span></div>
           </div>
         </div>
-        <div style="font-size:20px; cursor:pointer;" onclick="logout()">🚪</div>
+        <div style="display:flex; align-items:center; gap:14px;">
+          <div id="installIcon" style="font-size:20px; cursor:pointer; display:none;" onclick="installApp()" title="Install App">📲</div>
+          <div style="font-size:20px; cursor:pointer;" onclick="logout()">🚪</div>
+        </div>
       </div>
       <div class="datebar">
         <span id="dateNow">—</span>
@@ -301,14 +294,7 @@
   let authToken = null;
 
   // ---------------- AUTH UI ----------------
-  function showSignup() {
-    document.getElementById('loginForm').classList.add('hidden');
-    document.getElementById('signupForm').classList.remove('hidden');
-    document.getElementById('authTitle').innerHTML = '<h2>Create Admin Account</h2><p class="sub2">Set up your own login and password</p>';
-    hideAuthMsg();
-  }
   function showLogin() {
-    document.getElementById('signupForm').classList.add('hidden');
     document.getElementById('loginForm').classList.remove('hidden');
     document.getElementById('authTitle').innerHTML = '<h2>Welcome Back</h2><p class="sub2">Log in to monitor your water usage</p>';
     hideAuthMsg();
@@ -320,27 +306,6 @@
   }
   function hideAuthMsg() {
     document.getElementById('authMsg').className = 'errbox hidden';
-  }
-
-  async function doSignup() {
-    const name = document.getElementById('suName').value.trim();
-    const phone = document.getElementById('suPhone').value.trim();
-    const password = document.getElementById('suPassword').value;
-    const password2 = document.getElementById('suPassword2').value;
-
-    if (!name || !phone || !password) { showAuthMsg('Please fill in all fields.'); return; }
-    if (password.length < 6) { showAuthMsg('Password must be at least 6 characters.'); return; }
-    if (password !== password2) { showAuthMsg('Passwords do not match.'); return; }
-
-    try {
-      const res = await fetch('/api/auth/signup', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: 'admin', name, phone, password })
-      });
-      const data = await res.json();
-      if (!res.ok) { showAuthMsg(data.error || 'Signup failed.'); return; }
-      loginSuccess(data.token, data.user);
-    } catch (e) { showAuthMsg('Could not reach the server.'); }
   }
 
   async function doLogin() {
@@ -364,7 +329,7 @@
     authUser = user;
     localStorage.setItem('wm_token', token);
     localStorage.setItem('wm_user', JSON.stringify(user));
-    if (user.role === 'admin') {
+    if (user.role === 'admin' || user.role === 'super_admin') {
       window.location.href = '/admin.html';
       return;
     }
@@ -629,13 +594,28 @@
     const u = localStorage.getItem('wm_user');
     if (t && u) {
       authToken = t; authUser = JSON.parse(u);
-      if (authUser.role === 'admin') {
+      if (authUser.role === 'admin' || authUser.role === 'super_admin') {
         window.location.href = '/admin.html';
         return;
       }
       enterApp();
     }
   })();
+
+  // ---------------- PWA INSTALL PROMPT ----------------
+  let deferredInstallPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    const icon = document.getElementById('installIcon');
+    if (icon) icon.style.display = 'block';
+  });
+  function installApp() {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    deferredInstallPrompt = null;
+    document.getElementById('installIcon').style.display = 'none';
+  }
 
   // ---------------- REGISTER SERVICE WORKER (PWA) ----------------
   if ('serviceWorker' in navigator) {
