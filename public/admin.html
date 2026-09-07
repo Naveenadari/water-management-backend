@@ -71,6 +71,8 @@
 
   <div class="stats">
     <div class="card"><b id="statFlats">—</b><small>Total Flats</small></div>
+    <div class="card"><b id="statPaid" style="color:#6ee7b7;">—</b><small>Payments Done</small></div>
+    <div class="card"><b id="statPending" style="color:#fcd34d;">—</b><small>Payments Pending</small></div>
     <div class="card"><b id="statOpen">—</b><small>Valves Open</small></div>
     <div class="card"><b id="statTotal">—</b><small>Total Liters (all time)</small></div>
     <div class="card"><b id="statOver">—</b><small>Near/Over Limit</small></div>
@@ -87,6 +89,15 @@
       </div>
     </div>
     <div id="adminInviteError" class="errbox" style="display:none; margin-top:10px;"></div>
+  </div>
+
+  <div id="adminListCard" class="card hidden" style="margin-top:8px; border-color:rgba(251,191,36,0.4);">
+    <div style="font-size:13px; font-weight:600; color:#fcd34d; margin-bottom:10px;">📋 Apartment Admins</div>
+    <div id="adminListBody" style="font-size:13px;">Loading…</div>
+    <div id="viewingAdminBanner" class="hidden" style="margin-top:10px; font-size:12px; background:rgba(34,211,238,0.1); border:1px solid rgba(34,211,238,0.3); border-radius:10px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
+      <span id="viewingAdminText"></span>
+      <button class="act limit" onclick="clearAdminFilter()">Show All</button>
+    </div>
   </div>
 
   <div class="card" style="margin-top:8px;">
@@ -126,28 +137,17 @@
     <button class="act limit" id="paySelectedBtn" style="display:none;" onclick="paySelected()">Pay Selected (₹0)</button>
   </div>
 
-  <table>
-    <thead>
-      <tr>
-        <th></th>
-        <th>Flat</th>
-        <th>Owner</th>
-        <th>Phone</th>
-        <th>Payment</th>
-        <th>Flow</th>
-        <th>Today (L)</th>
-        <th>Total (L)</th>
-        <th>Limit</th>
-        <th>Valve</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody id="flatsBody"></tbody>
-  </table>
+  <div id="navBreadcrumb" style="font-size:12px; color:#94a3b8; margin:10px 0;"></div>
+  <div id="navArea"></div>
   <div id="emptyMsg" class="empty hidden">No flats yet. Generate an invite link above to add your first flat owner.</div>
 </div>
 
 <script>
+  let flatsCache = [];
+  let navView = 'floors';   // 'floors' | 'flats' | 'detail'
+  let navFloor = null;
+  let navFlatKey = null;
+
   const token = localStorage.getItem('wm_token');
   const userRaw = localStorage.getItem('wm_user');
 
@@ -161,8 +161,41 @@
 
   document.getElementById('adminName').textContent = 'Logged in as ' + user.name + (user.role === 'super_admin' ? ' (Super Admin)' : '');
 
+  let filterAdminPhone = null;
+
   if (user.role === 'super_admin') {
     document.getElementById('superAdminCard').classList.remove('hidden');
+    document.getElementById('adminListCard').classList.remove('hidden');
+    loadAdminList();
+  }
+
+  async function loadAdminList() {
+    try {
+      const res = await fetch('/api/admins', { headers: authHeaders() });
+      const admins = await res.json();
+      const body = document.getElementById('adminListBody');
+      if (admins.length === 0) { body.textContent = 'No apartment admins invited yet.'; return; }
+
+      body.innerHTML = admins.map(a => `
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #0f172a; cursor:pointer;" onclick="filterByAdmin('${a.phone}','${a.name}')">
+          <div><b style="color:#fff;">${a.name}</b> <span style="color:#64748b; font-size:11px;">· ${a.phone}</span></div>
+          <div style="color:#22d3ee; font-size:12px;">${a.total_flats} flat(s) →</div>
+        </div>
+      `).join('');
+    } catch (e) { /* silent */ }
+  }
+
+  function filterByAdmin(phone, name) {
+    filterAdminPhone = phone;
+    document.getElementById('viewingAdminText').textContent = `Showing flats managed by: ${name}`;
+    document.getElementById('viewingAdminBanner').classList.remove('hidden');
+    loadFlats();
+  }
+
+  function clearAdminFilter() {
+    filterAdminPhone = null;
+    document.getElementById('viewingAdminBanner').classList.add('hidden');
+    loadFlats();
   }
 
   async function createAdminInvite() {
@@ -212,79 +245,176 @@
 
   async function loadFlats() {
     try {
-      const res = await fetch('/api/flats', { headers: authHeaders() });
+      const url = filterAdminPhone ? `/api/flats?admin_phone=${filterAdminPhone}` : '/api/flats';
+      const res = await fetch(url, { headers: authHeaders() });
       if (res.status === 401 || res.status === 403) { logout(); return; }
       const flats = await res.json();
+      flatsCache = flats;
 
-      const tbody = document.getElementById('flatsBody');
       const emptyMsg = document.getElementById('emptyMsg');
-      tbody.innerHTML = '';
+      emptyMsg.classList.toggle('hidden', flats.length !== 0);
 
-      if (flats.length === 0) {
-        emptyMsg.classList.remove('hidden');
-      } else {
-        emptyMsg.classList.add('hidden');
-      }
-
-      let openCount = 0, totalAll = 0, overCount = 0;
-
+      let openCount = 0, totalAll = 0, overCount = 0, paidCount = 0, pendingCount = 0;
       flats.forEach(f => {
-        const isOpen = f.valve_status === 'OPEN';
-        if (isOpen) openCount++;
+        if (f.valve_status === 'OPEN') openCount++;
         const paid = f.subscription_active;
-        const total = paid ? (f.total_liters || 0) : 0;
-        if (paid) totalAll += total;
+        if (paid) totalAll += (f.total_liters || 0);
         if (paid && f.limit && (f.today_usage || 0) / f.limit >= 0.8) overCount++;
-
-        const locked = '<span class="flatsub">🔒 Payment pending</span>';
-
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${paid ? '' : `<input type="checkbox" class="payCheckbox" data-key="${f.apartment}|${f.floor}|${f.flat}" onchange="updatePaySelected()" />`}</td>
-          <td><div class="flatname">Flat ${f.flat}</div><div class="flatsub">${f.apartment} · ${f.floor}</div></td>
-          <td>${f.owner_name || '<span class="flatsub">Not signed up</span>'}</td>
-          <td>${f.owner_phone || '<span class="flatsub">—</span>'}</td>
-          <td>${paid ? `<span class="badge open">Paid</span>` : `<span class="badge warn">Pending</span>`}</td>
-          <td>${paid ? (f.flow_lpm || 0).toFixed(1) + ' L/min' : locked}</td>
-          <td>${paid ? (f.today_usage || 0).toFixed(1) : locked}</td>
-          <td>${paid ? total.toFixed(1) : locked}</td>
-          <td>
-            <div class="btns">
-              ${paid ? limitBadge(f) : locked}
-            </div>
-            <div class="btns" style="margin-top:6px;">
-              <input class="limitInput" type="number" placeholder="Liters/day" id="limit-${f.apartment}-${f.floor}-${f.flat}" value="${f.limit || ''}" />
-              <button class="act limit" onclick="setLimit('${f.apartment}','${f.floor}','${f.flat}')">Set</button>
-            </div>
-          </td>
-          <td>${f.has_valve !== false ? `<span class="badge ${isOpen ? 'open' : 'closed'}">${isOpen ? 'Open' : 'Closed'}</span>` : `<span class="badge closed">No Valve</span>`}</td>
-          <td>
-            <div class="btns">
-              ${f.has_valve !== false
-                ? `<button class="act open" onclick="controlValve('${f.apartment}','${f.floor}','${f.flat}','OPEN')">Open</button>
-                   <button class="act close" onclick="controlValve('${f.apartment}','${f.floor}','${f.flat}','CLOSE')">Close</button>`
-                : ``}
-            </div>
-            <div class="btns" style="margin-top:6px;">
-              <button class="act limit" onclick="toggleValveFitted('${f.apartment}','${f.floor}','${f.flat}', ${f.has_valve === false})">${f.has_valve === false ? 'Mark Valve Fitted' : 'Mark No Valve'}</button>
-            </div>
-            <div class="btns" style="margin-top:6px;">
-              <button class="act limit" onclick="resetPassword('${f.apartment}','${f.floor}','${f.flat}')">Reset Password</button>
-              <button class="act delete" onclick="deleteAccount('${f.apartment}','${f.floor}','${f.flat}')">Delete</button>
-            </div>
-          </td>
-        `;
-        tbody.appendChild(tr);
+        if (f.owner_name) { if (paid) paidCount++; else pendingCount++; }
       });
 
       document.getElementById('statFlats').textContent = flats.length;
+      document.getElementById('statPaid').textContent = paidCount;
+      document.getElementById('statPending').textContent = pendingCount;
       document.getElementById('statOpen').textContent = openCount;
       document.getElementById('statTotal').textContent = totalAll.toFixed(0);
       document.getElementById('statOver').textContent = overCount;
+
+      renderNav();
       updatePaySelected();
     } catch (e) {
       console.error(e);
     }
+  }
+
+  // ---------------- FLOOR -> FLATS -> DETAIL NAVIGATOR ----------------
+  function floorSortKey(floor) {
+    const m = String(floor).match(/(\d+)/);
+    return m ? parseInt(m[1], 10) : 999;
+  }
+  function flatSortKey(flat) {
+    const n = parseInt(String(flat).replace(/\D/g, ''), 10);
+    return isNaN(n) ? 999999 : n;
+  }
+
+  function renderNav() {
+    if (navView === 'detail' && navFlatKey) return renderDetailView();
+    if (navView === 'flats' && navFloor) return renderFlatsView();
+    return renderFloorsView();
+  }
+
+  function renderFloorsView() {
+    navView = 'floors'; navFloor = null; navFlatKey = null;
+    document.getElementById('navBreadcrumb').textContent = 'Floors';
+
+    const floors = {};
+    flatsCache.forEach(f => {
+      if (!floors[f.floor]) floors[f.floor] = [];
+      floors[f.floor].push(f);
+    });
+    const floorNames = Object.keys(floors).sort((a, b) => floorSortKey(a) - floorSortKey(b));
+
+    const area = document.getElementById('navArea');
+    if (floorNames.length === 0) { area.innerHTML = ''; return; }
+
+    area.innerHTML = floorNames.map(fl => {
+      const flats = floors[fl];
+      const paid = flats.filter(f => f.subscription_active).length;
+      return `
+        <div class="card" style="margin-bottom:10px; cursor:pointer;" onclick="openFloor('${fl}')">
+          <div class="row">
+            <div>
+              <div class="flatname" style="font-size:15px;">${fl}</div>
+              <div class="flatsub">${flats.length} flat(s) · ${paid} paid</div>
+            </div>
+            <div style="color:#22d3ee; font-size:18px;">→</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function openFloor(floor) {
+    navView = 'flats'; navFloor = floor;
+    renderNav();
+  }
+
+  function renderFlatsView() {
+    document.getElementById('navBreadcrumb').innerHTML = `<a style="color:#22d3ee; cursor:pointer;" onclick="renderFloorsView()">← Floors</a> / ${navFloor}`;
+
+    const flats = flatsCache.filter(f => f.floor === navFloor).sort((a, b) => flatSortKey(a.flat) - flatSortKey(b.flat));
+    const area = document.getElementById('navArea');
+
+    area.innerHTML = flats.map(f => {
+      const paid = f.subscription_active;
+      const key = `${f.apartment}|${f.floor}|${f.flat}`;
+      return `
+        <div class="card" style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+          <div style="display:flex; align-items:center; gap:10px; cursor:pointer; flex:1;" onclick="openFlat('${key}')">
+            ${!paid && f.owner_name ? `<input type="checkbox" class="payCheckbox" data-key="${key}" onclick="event.stopPropagation()" onchange="updatePaySelected()" />` : ''}
+            <div>
+              <div class="flatname">Flat ${f.flat}</div>
+              <div class="flatsub">${f.owner_name || 'Not signed up'}</div>
+            </div>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px;">
+            ${paid ? '<span class="badge open">Paid</span>' : '<span class="badge warn">Pending</span>'}
+            ${f.has_valve !== false ? `<span class="badge ${f.valve_status === 'OPEN' ? 'open' : 'closed'}">${f.valve_status === 'OPEN' ? 'Open' : 'Closed'}</span>` : '<span class="badge closed">No Valve</span>'}
+            <span style="color:#64748b;">→</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function openFlat(key) {
+    navView = 'detail'; navFlatKey = key;
+    renderNav();
+  }
+
+  function renderDetailView() {
+    const [apartment, floor, flat] = navFlatKey.split('|');
+    const f = flatsCache.find(x => x.apartment === apartment && x.floor === floor && x.flat === flat);
+    document.getElementById('navBreadcrumb').innerHTML = `<a style="color:#22d3ee; cursor:pointer;" onclick="renderFloorsView()">← Floors</a> / <a style="color:#22d3ee; cursor:pointer;" onclick="openFloor('${floor}')">${floor}</a> / Flat ${flat}`;
+
+    if (!f) { document.getElementById('navArea').innerHTML = '<div class="empty">Flat not found.</div>'; return; }
+
+    const paid = f.subscription_active;
+    const locked = '<span class="flatsub">🔒 Payment pending</span>';
+    const isOpen = f.valve_status === 'OPEN';
+
+    document.getElementById('navArea').innerHTML = `
+      <div class="card">
+        <div class="flatname" style="font-size:16px; margin-bottom:2px;">Flat ${f.flat}</div>
+        <div class="flatsub" style="margin-bottom:14px;">${f.apartment} · ${f.floor}</div>
+
+        <div class="stats" style="margin-bottom:14px;">
+          <div class="card"><b>${f.owner_name || '—'}</b><small>Owner</small></div>
+          <div class="card"><b>${f.owner_phone || '—'}</b><small>Phone</small></div>
+          <div class="card"><b>${paid ? 'Paid' : 'Pending'}</b><small>Payment</small></div>
+        </div>
+
+        <div class="stats" style="margin-bottom:14px;">
+          <div class="card"><b>${paid ? (f.flow_lpm || 0).toFixed(1) : '🔒'}</b><small>Flow L/min</small></div>
+          <div class="card"><b>${paid ? (f.today_usage || 0).toFixed(1) : '🔒'}</b><small>Today (L)</small></div>
+          <div class="card"><b>${paid ? (f.total_liters || 0).toFixed(1) : '🔒'}</b><small>Total (L)</small></div>
+        </div>
+
+        <div style="margin-bottom:14px;">
+          <div style="font-size:12px; color:#94a3b8; margin-bottom:6px;">Daily Limit: ${paid ? limitBadge(f) : locked}</div>
+          <div class="btns">
+            <input class="limitInput" type="number" placeholder="Liters/day" id="limit-${f.apartment}-${f.floor}-${f.flat}" value="${f.limit || ''}" />
+            <button class="act limit" onclick="setLimit('${f.apartment}','${f.floor}','${f.flat}')">Set</button>
+          </div>
+        </div>
+
+        <div style="margin-bottom:14px;">
+          <div style="font-size:12px; color:#94a3b8; margin-bottom:6px;">Valve: ${f.has_valve !== false ? (isOpen ? 'Open' : 'Closed') : 'No Valve Fitted'}</div>
+          <div class="btns">
+            ${f.has_valve !== false
+              ? `<button class="act open" onclick="controlValve('${f.apartment}','${f.floor}','${f.flat}','OPEN')">Open</button>
+                 <button class="act close" onclick="controlValve('${f.apartment}','${f.floor}','${f.flat}','CLOSE')">Close</button>`
+              : ''}
+            <button class="act limit" onclick="toggleValveFitted('${f.apartment}','${f.floor}','${f.flat}', ${f.has_valve === false})">${f.has_valve === false ? 'Mark Valve Fitted' : 'Mark No Valve'}</button>
+          </div>
+        </div>
+
+        <div class="btns">
+          <button class="act limit" onclick="resetPassword('${f.apartment}','${f.floor}','${f.flat}')">Reset Password</button>
+          <button class="act delete" onclick="deleteAccount('${f.apartment}','${f.floor}','${f.flat}')">Delete</button>
+        </div>
+      </div>
+    `;
   }
 
   async function toggleValveFitted(apartment, floor, flat, newHasValve) {
@@ -368,11 +498,17 @@
   }
 
   async function deleteAccount(apartment, floor, flat) {
-    if (!confirm(`Delete the account for Flat ${flat}? They will need a new invite link to sign up again.`)) return;
+    if (!confirm(`Delete Flat ${flat} entirely? This removes the account (if any) and all its stored data. A new invite link will be needed.`)) return;
     try {
-      await fetch(`/api/users/${apartment}/${floor}/${flat}`, { method: 'DELETE', headers: authHeaders() });
+      const res = await fetch(`/api/users/${apartment}/${floor}/${flat}`, { method: 'DELETE', headers: authHeaders() });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert('Failed: ' + (data.error || res.status));
+        return;
+      }
+      navView = 'flats';
       loadFlats();
-    } catch (e) { alert('Could not reach server.'); }
+    } catch (e) { alert('Could not reach server: ' + e.message); }
   }
 
   async function loadAlerts() {
