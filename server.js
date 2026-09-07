@@ -532,6 +532,15 @@ app.get("/api/device/command/:apartment/:floor/:flat", (req, res) => {
 
 // ================= APP/DASHBOARD -> BACKEND (auth required) =================
 
+// Admin toggles whether a flat has a valve fitted (flow-only flats hide valve controls)
+app.post("/api/flat-config/:apartment/:floor/:flat", requireAuth, requireAdmin, ah(async (req, res) => {
+  const { apartment, floor, flat } = req.params;
+  const { has_valve } = req.body;
+  const key = keyFor(apartment, floor, flat);
+  await dbSetHasValve(key, !!has_valve);
+  res.json({ success: true, key, has_valve: !!has_valve });
+}));
+
 app.get("/api/flats", requireAuth, requireAdmin, ah(async (req, res) => {
   const [allFlatsData, owners] = await Promise.all([dbGetAllFlatsData(), dbGetAllFlatOwners()]);
 
@@ -547,12 +556,14 @@ app.get("/api/flats", requireAuth, requireAdmin, ah(async (req, res) => {
     const active = await isSubscriptionActive(key);
     const limit = await dbGetLimit(key);
     const todayUsage = active ? await dbGetDailyUsage(key, todayStr()) : null;
+    const hasValve = await dbGetHasValve(key);
 
     return {
       apartment, floor, flat,
       owner_name: owner ? owner.name : null,
       owner_phone: owner ? owner.phone : null,
       valve_status: flatData ? flatData.valve_status : null,
+      has_valve: hasValve,
       subscription_active: active,
       flow_lpm: active ? (flatData ? Number(flatData.flow_lpm) || 0 : 0) : null,
       total_liters: active ? (flatData ? Number(flatData.total_liters) || 0 : 0) : null,
@@ -575,9 +586,11 @@ app.get("/api/flats/:apartment/:floor/:flat", requireAuth, ah(async (req, res) =
 
   const active = await isSubscriptionActive(key);
   const limit = await dbGetLimit(key);
+  const hasValve = await dbGetHasValve(key);
 
   res.json({
     subscription_active: active,
+    has_valve: hasValve,
     latest: active ? await dbGetFlatData(key) : null,
     history: active ? await dbGetHistory(key) : [],
     limit,
