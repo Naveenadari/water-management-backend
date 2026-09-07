@@ -31,7 +31,10 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || "";
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || "";
 const SUBSCRIPTION_AMOUNT_PAISE = parseInt(process.env.SUBSCRIPTION_AMOUNT_PAISE || "9900", 10);
-const SUBSCRIPTION_DAYS = 30;
+const CYCLE_DAYS = 30;
+const TRIAL_DAYS = 7;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const EXPIRY_ALERT_DAYS = 3;
 
 let razorpay = null;
 if (RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET) {
@@ -136,10 +139,66 @@ async function dbGetSubscriptionPaidUntil(key) {
   return data ? data.paid_until : null;
 }
 async function dbSetSubscription(key, paidUntilISO) { await supabase.from("subscriptions").upsert({ key, paid_until: paidUntilISO }); }
+
+const CYCLE_MS = CYCLE_DAYS * MS_PER_DAY;
+
+// The "reference" is the anchor point for this flat's billing cycle:
+// - First ever cycle anchor is 7 days after signup (end of free trial)
+// - After any payment, the anchor moves forward by exactly the cycles paid for —
+//   never reset to "now", so late payments don't lose or gain days.
+async function getBillingReference(key) {
+  const [apartment, floor, flat] = key.split("/");
+  const owner = await dbGetFlatOwnerByKey(apartment, floor, flat);
+  const trialEnd = owner ? new Date(new Date(owner.created_at).getTime() + TRIAL_DAYS * MS_PER_DAY) : new Date();
+
+  const paidUntilISO = await dbGetSubscriptionPaidUntil(key);
+  const paidUntil = paidUntilISO ? new Date(paidUntilISO) : null;
+
+  // The reference never moves backward — it's whichever is later: the trial end,
+  // or the last date they're paid up to. All future 30-day cycles count from here.
+  const reference = paidUntil && paidUntil > trialEnd ? paidUntil : trialEnd;
+  return { reference, trialEnd };
+}
+
 async function isSubscriptionActive(key) {
-  const paidUntil = await dbGetSubscriptionPaidUntil(key);
-  if (!paidUntil) return false;
-  return new Date(paidUntil) > new Date();
+  const { reference } = await getBillingReference(key);
+  return new Date() < reference;
+}
+
+// How much is owed right now (in 30-day cycles), and what the new expiry will be once paid.
+// Late payment never resets the cycle clock — arrears just accumulate in fixed 30-day blocks
+// from the reference date, so a late payment only unlocks the remainder of that block.
+async function computeAmountDue(key) {
+  const { reference } = await getBillingReference(key);
+  const now = new Date();
+
+  let cycles;
+  if (now <= reference) {
+    cycles = 1; // paying ahead of time / renewing right on schedule — one normal cycle
+  } else {
+    cycles = Math.ceil((now - reference) / CYCLE_MS); // overdue cycles, including the current one
+  }
+
+  const amountDue = SUBSCRIPTION_AMOUNT_PAISE * cycles;
+  const newPaidUntil = new Date(reference.getTime() + cycles * CYCLE_MS);
+  return { cycles, amountDue, newPaidUntil };
+}
+
+// Sends a "your subscription is about to expire" notification once per billing reference,
+// starting 3 days before it lapses. Safe to call repeatedly — it only fires once per reference.
+async function checkExpiryAlert(key) {
+  const { reference } = await getBillingReference(key);
+  const now = new Date();
+  const msLeft = reference - now;
+  if (msLeft <= 0 || msLeft > 3 * MS_PER_DAY) return;
+
+  const alertedFor = await dbGetSubAlertedDue(key);
+  if (alertedFor === reference.toISOString()) return; // already alerted for this exact reference
+
+  const daysLeft = Math.max(1, Math.ceil(msLeft / MS_PER_DAY));
+  const [, , flat] = key.split("/");
+  await pushNotification(key, "warning", `Flat ${flat}'s water usage subscription expires in ${daysLeft} day${daysLeft > 1 ? "s" : ""}. Please renew to avoid losing access.`);
+  await dbSetSubAlertedDue(key, reference.toISOString());
 }
 
 async function dbUpsertFlatData(key, apartment, floor, flat, record) {
@@ -217,6 +276,27 @@ async function dbGetAdminOrder(orderId) {
   return data ? data.flat_keys : null;
 }
 async function dbDeleteAdminOrder(orderId) { await supabase.from("admin_orders").delete().eq("order_id", orderId); }
+
+async function dbGetHasValve(key) {
+  const { data } = await supabase.from("flat_config").select("has_valve").eq("key", key).maybeSingle();
+  return data ? data.has_valve : true; // default: assume valve installed unless told otherwise
+}
+async function dbSetHasValve(key, hasValve) { await supabase.from("flat_config").upsert({ key, has_valve: hasValve }); }
+
+async function dbSavePaymentOrder(orderId, key, periods, baseDueISO) {
+  await supabase.from("payment_orders").insert({ order_id: orderId, key, periods, base_due: baseDueISO });
+}
+async function dbGetPaymentOrder(orderId) {
+  const { data } = await supabase.from("payment_orders").select("*").eq("order_id", orderId).maybeSingle();
+  return data;
+}
+async function dbDeletePaymentOrder(orderId) { await supabase.from("payment_orders").delete().eq("order_id", orderId); }
+
+async function dbGetSubAlertedDue(key) {
+  const { data } = await supabase.from("sub_alert_sent").select("alerted_for_due").eq("key", key).maybeSingle();
+  return data ? data.alerted_for_due : null;
+}
+async function dbSetSubAlertedDue(key, dueISO) { await supabase.from("sub_alert_sent").upsert({ key, alerted_for_due: dueISO }); }
 
 // ---------------- AUTH MIDDLEWARE ----------------
 async function requireAuth(req, res, next) {
@@ -559,10 +639,14 @@ app.get("/api/subscription/:apartment/:floor/:flat", requireAuth, ah(async (req,
     if (ownKey !== key) return res.status(403).json({ error: "You can only view your own subscription" });
   }
 
+  await checkExpiryAlert(key);
+  const { cycles, amountDue } = await computeAmountDue(key);
+
   res.json({
     active: await isSubscriptionActive(key),
     paid_until: await dbGetSubscriptionPaidUntil(key),
-    amount_paise: SUBSCRIPTION_AMOUNT_PAISE,
+    amount_paise: amountDue,
+    cycles_due: cycles,
   });
 }));
 
@@ -571,13 +655,17 @@ app.post("/api/payment/create-order", requireAuth, ah(async (req, res) => {
   if (!razorpay) return res.status(500).json({ error: "Payment gateway is not configured yet. Please contact your admin." });
 
   const key = keyFor(req.user.apartment, req.user.floor, req.user.flat);
+  const { cycles, amountDue } = await computeAmountDue(key);
+  const { reference } = await getBillingReference(key);
+
   try {
     const order = await razorpay.orders.create({
-      amount: SUBSCRIPTION_AMOUNT_PAISE, currency: "INR",
+      amount: amountDue, currency: "INR",
       receipt: `sub_${key.replace(/\//g, "_")}_${Date.now()}`,
-      notes: { apartment: req.user.apartment, floor: req.user.floor, flat: req.user.flat },
+      notes: { apartment: req.user.apartment, floor: req.user.floor, flat: req.user.flat, cycles: String(cycles) },
     });
-    res.json({ order_id: order.id, amount: order.amount, currency: order.currency, key_id: RAZORPAY_KEY_ID });
+    await dbSavePaymentOrder(order.id, key, cycles, reference.toISOString());
+    res.json({ order_id: order.id, amount: order.amount, currency: order.currency, key_id: RAZORPAY_KEY_ID, cycles });
   } catch (e) {
     console.error("Razorpay order creation failed:", e);
     res.status(500).json({ error: "Could not create payment order" });
@@ -591,13 +679,21 @@ app.post("/api/payment/admin/create-order", requireAuth, requireAdmin, ah(async 
   if (!Array.isArray(flats) || flats.length === 0) return res.status(400).json({ error: "Select at least one flat to pay for" });
 
   const keys = flats.map((f) => keyFor(f.apartment, f.floor, f.flat));
-  const amount = SUBSCRIPTION_AMOUNT_PAISE * keys.length;
+  const entries = [];
+  let totalAmount = 0;
+
+  for (const key of keys) {
+    const { cycles, amountDue } = await computeAmountDue(key);
+    const { reference } = await getBillingReference(key);
+    entries.push({ key, cycles, base_due: reference.toISOString() });
+    totalAmount += amountDue;
+  }
 
   try {
     const order = await razorpay.orders.create({
-      amount, currency: "INR", receipt: `admin_bulk_${Date.now()}`, notes: { flats: keys.join(",") },
+      amount: totalAmount, currency: "INR", receipt: `admin_bulk_${Date.now()}`, notes: { flats: keys.join(",") },
     });
-    await dbSaveAdminOrder(order.id, keys);
+    await dbSaveAdminOrder(order.id, entries);
     res.json({ order_id: order.id, amount: order.amount, currency: order.currency, key_id: RAZORPAY_KEY_ID, flat_count: keys.length });
   } catch (e) {
     console.error("Razorpay admin order creation failed:", e);
@@ -612,17 +708,19 @@ app.post("/api/payment/admin/verify", requireAuth, requireAdmin, ah(async (req, 
   const expectedSignature = crypto.createHmac("sha256", RAZORPAY_KEY_SECRET).update(`${razorpay_order_id}|${razorpay_payment_id}`).digest("hex");
   if (expectedSignature !== razorpay_signature) return res.status(400).json({ error: "Payment verification failed" });
 
-  const keys = await dbGetAdminOrder(razorpay_order_id);
-  if (!keys) return res.status(404).json({ error: "Order not found" });
+  const entries = await dbGetAdminOrder(razorpay_order_id);
+  if (!entries) return res.status(404).json({ error: "Order not found" });
 
-  const paidUntil = new Date(Date.now() + SUBSCRIPTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  for (const key of keys) {
-    await dbSetSubscription(key, paidUntil);
-    console.log(`Subscription activated (by admin) for ${key} until ${paidUntil}`);
+  const paidKeys = [];
+  for (const entry of entries) {
+    const newPaidUntil = new Date(new Date(entry.base_due).getTime() + entry.cycles * CYCLE_MS).toISOString();
+    await dbSetSubscription(entry.key, newPaidUntil);
+    paidKeys.push(entry.key);
+    console.log(`Subscription extended (by admin) for ${entry.key} by ${entry.cycles} cycle(s), now valid until ${newPaidUntil}`);
   }
   await dbDeleteAdminOrder(razorpay_order_id);
 
-  res.json({ success: true, flats_paid: keys, paid_until: paidUntil });
+  res.json({ success: true, flats_paid: paidKeys });
 }));
 
 app.post("/api/payment/verify", requireAuth, ah(async (req, res) => {
@@ -634,12 +732,15 @@ app.post("/api/payment/verify", requireAuth, ah(async (req, res) => {
   const expectedSignature = crypto.createHmac("sha256", RAZORPAY_KEY_SECRET).update(`${razorpay_order_id}|${razorpay_payment_id}`).digest("hex");
   if (expectedSignature !== razorpay_signature) return res.status(400).json({ error: "Payment verification failed" });
 
-  const key = keyFor(req.user.apartment, req.user.floor, req.user.flat);
-  const paidUntil = new Date(Date.now() + SUBSCRIPTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  await dbSetSubscription(key, paidUntil);
+  const order = await dbGetPaymentOrder(razorpay_order_id);
+  if (!order) return res.status(404).json({ error: "Order not found or already used" });
 
-  console.log(`Subscription activated for ${key} until ${paidUntil}`);
-  res.json({ success: true, paid_until: paidUntil });
+  const newPaidUntil = new Date(new Date(order.base_due).getTime() + order.periods * CYCLE_MS).toISOString();
+  await dbSetSubscription(order.key, newPaidUntil);
+  await dbDeletePaymentOrder(razorpay_order_id);
+
+  console.log(`Subscription extended for ${order.key} by ${order.periods} cycle(s), now valid until ${newPaidUntil}`);
+  res.json({ success: true, paid_until: newPaidUntil, cycles_paid: order.periods });
 }));
 
 app.post("/api/limits/:apartment/:floor/:flat", requireAuth, requireAdmin, ah(async (req, res) => {
