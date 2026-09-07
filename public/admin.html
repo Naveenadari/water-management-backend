@@ -289,11 +289,18 @@
 
   async function toggleValveFitted(apartment, floor, flat, newHasValve) {
     try {
-      await fetch(`/api/flat-config/${apartment}/${floor}/${flat}`, {
+      const res = await fetch(`/api/flat-config/${apartment}/${floor}/${flat}`, {
         method: 'POST', headers: authHeaders(), body: JSON.stringify({ has_valve: newHasValve })
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert('Failed: ' + (data.error || res.status));
+        return;
+      }
       loadFlats();
-    } catch (e) { alert('Could not reach server.'); }
+    } catch (e) {
+      alert('Could not reach server: ' + e.message);
+    }
   }
 
   async function controlValve(apartment, floor, flat, action) {
