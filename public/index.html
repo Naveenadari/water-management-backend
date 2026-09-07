@@ -498,6 +498,12 @@
       const res = await fetch(`/api/flats/${authUser.apartment}/${authUser.floor}/${authUser.flat}`, { headers: authHeaders() });
       if (res.status === 401) { logout(); return; }
       const data = await res.json();
+
+      const hasValve = data.has_valve !== false;
+      document.getElementById('valveBadge').style.display = hasValve ? '' : 'none';
+      document.getElementById('btnOpen').parentElement.style.display = hasValve ? '' : 'none';
+      document.getElementById('btnClose').parentElement.style.display = hasValve ? '' : 'none';
+
       if (data.latest) {
         const lpm = data.latest.flow_lpm || 0;
         document.getElementById('flowVal').textContent = lpm.toFixed(1);
@@ -505,7 +511,11 @@
         document.getElementById('statLast').textContent = lpm.toFixed(1);
         const t = data.latest.received_at ? new Date(data.latest.received_at) : null;
         document.getElementById('statUpdated').textContent = t ? t.toLocaleTimeString() : '—';
-        updateValveUI(data.latest.valve_status === 'OPEN');
+        if (hasValve) updateValveUI(data.latest.valve_status === 'OPEN');
+        else {
+          document.getElementById('flowvis').classList.toggle('flowing', lpm > 0);
+          document.getElementById('flowState').textContent = lpm > 0 ? 'L/MIN · FLOWING' : 'L/MIN · IDLE';
+        }
       }
     } catch (e) { /* silent */ }
   }
