@@ -257,11 +257,16 @@
               <button class="act limit" onclick="setLimit('${f.apartment}','${f.floor}','${f.flat}')">Set</button>
             </div>
           </td>
-          <td><span class="badge ${isOpen ? 'open' : 'closed'}">${isOpen ? 'Open' : 'Closed'}</span></td>
+          <td>${f.has_valve !== false ? `<span class="badge ${isOpen ? 'open' : 'closed'}">${isOpen ? 'Open' : 'Closed'}</span>` : `<span class="badge closed">No Valve</span>`}</td>
           <td>
             <div class="btns">
-              <button class="act open" onclick="controlValve('${f.apartment}','${f.floor}','${f.flat}','OPEN')">Open</button>
-              <button class="act close" onclick="controlValve('${f.apartment}','${f.floor}','${f.flat}','CLOSE')">Close</button>
+              ${f.has_valve !== false
+                ? `<button class="act open" onclick="controlValve('${f.apartment}','${f.floor}','${f.flat}','OPEN')">Open</button>
+                   <button class="act close" onclick="controlValve('${f.apartment}','${f.floor}','${f.flat}','CLOSE')">Close</button>`
+                : ``}
+            </div>
+            <div class="btns" style="margin-top:6px;">
+              <button class="act limit" onclick="toggleValveFitted('${f.apartment}','${f.floor}','${f.flat}', ${f.has_valve === false})">${f.has_valve === false ? 'Mark Valve Fitted' : 'Mark No Valve'}</button>
             </div>
             <div class="btns" style="margin-top:6px;">
               <button class="act limit" onclick="resetPassword('${f.apartment}','${f.floor}','${f.flat}')">Reset Password</button>
@@ -280,6 +285,15 @@
     } catch (e) {
       console.error(e);
     }
+  }
+
+  async function toggleValveFitted(apartment, floor, flat, newHasValve) {
+    try {
+      await fetch(`/api/flat-config/${apartment}/${floor}/${flat}`, {
+        method: 'POST', headers: authHeaders(), body: JSON.stringify({ has_valve: newHasValve })
+      });
+      loadFlats();
+    } catch (e) { alert('Could not reach server.'); }
   }
 
   async function controlValve(apartment, floor, flat, action) {
