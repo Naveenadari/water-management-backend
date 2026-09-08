@@ -151,14 +151,18 @@
     <div id="alertsList" style="font-size:12px; color:#94a3b8;">No alerts yet.</div>
   </div>
 
-  <div class="toolbar" style="align-items:center; justify-content:space-between;">
-    <button class="refresh" onclick="loadFlats()">↻ Refresh</button>
-    <button class="act limit" id="paySelectedBtn" style="display:none;" onclick="paySelected()">Pay Selected (₹0)</button>
+  <div id="navigatorWrap">
+    <div class="toolbar" style="align-items:center; justify-content:space-between;">
+      <button class="refresh" onclick="loadFlats()">↻ Refresh</button>
+      <button class="act limit" id="paySelectedBtn" style="display:none;" onclick="paySelected()">Pay Selected (₹0)</button>
+    </div>
+
+    <div id="navBreadcrumb" style="font-size:12px; color:#94a3b8; margin:10px 0;"></div>
+    <div id="navArea"></div>
+    <div id="emptyMsg" class="empty hidden">No flats yet. Generate an invite link above to add your first flat owner.</div>
   </div>
 
-  <div id="navBreadcrumb" style="font-size:12px; color:#94a3b8; margin:10px 0;"></div>
-  <div id="navArea"></div>
-  <div id="emptyMsg" class="empty hidden">No flats yet. Generate an invite link above to add your first flat owner.</div>
+  <div id="pickAdminHint" class="empty hidden">👆 Click an apartment admin above to see their flats, floor by floor.</div>
 </div>
 
 <script>
@@ -184,6 +188,12 @@
 
   let filterAdminPhone = null;
 
+  function updateNavVisibility() {
+    const showNav = user.role !== 'super_admin' || !!filterAdminPhone;
+    document.getElementById('navigatorWrap').classList.toggle('hidden', !showNav);
+    document.getElementById('pickAdminHint').classList.toggle('hidden', showNav);
+  }
+
   if (user.role === 'super_admin') {
     document.getElementById('superAdminCard').classList.remove('hidden');
     document.getElementById('adminListCard').classList.remove('hidden');
@@ -191,6 +201,7 @@
   } else {
     document.getElementById('layoutCard').classList.remove('hidden');
   }
+  updateNavVisibility();
   loadBuildingLayout();
 
   async function loadBuildingLayout() {
@@ -264,6 +275,7 @@
     filterAdminPhone = phone;
     document.getElementById('viewingAdminText').textContent = `Showing flats managed by: ${name}`;
     document.getElementById('viewingAdminBanner').classList.remove('hidden');
+    updateNavVisibility();
     loadBuildingLayout();
     loadFlats();
   }
@@ -272,6 +284,7 @@
     filterAdminPhone = null;
     document.getElementById('viewingAdminBanner').classList.add('hidden');
     layoutCache = { floors: 0, flats_per_floor: 0 };
+    updateNavVisibility();
     loadFlats();
   }
 
