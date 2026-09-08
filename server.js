@@ -599,6 +599,7 @@ app.get("/api/flats", requireAuth, requireAdmin, ah(async (req, res) => {
     return {
       apartment, floor, flat,
       owner_name: owner ? owner.name : null,
+      managed_by: owner ? owner.managed_by : null,
       owner_phone: owner ? owner.phone : null,
       valve_status: flatData ? flatData.valve_status : null,
       has_valve: hasValve,
@@ -614,6 +615,17 @@ app.get("/api/flats", requireAuth, requireAdmin, ah(async (req, res) => {
 }));
 
 // Super admin: list all apartment admins, with a quick flat-count summary for each
+// Super admin deletes an apartment admin's account
+app.delete("/api/admins/:phone", requireAuth, requireSuperAdmin, ah(async (req, res) => {
+  const { phone } = req.params;
+  const target = await dbGetUser(phone);
+  if (!target || target.role !== "admin") return res.status(404).json({ error: "Admin not found" });
+
+  await dbDeleteUser(phone);
+  await dbDeleteSessionsForPhone(phone);
+  res.json({ success: true });
+}));
+
 app.get("/api/admins", requireAuth, requireSuperAdmin, ah(async (req, res) => {
   const [admins, owners] = await Promise.all([dbGetAllAdmins(), dbGetAllFlatOwners()]);
 
@@ -626,6 +638,22 @@ app.get("/api/admins", requireAuth, requireSuperAdmin, ah(async (req, res) => {
   });
 
   res.json(result);
+}));
+
+// Super admin assigns/reassigns which apartment admin manages a given flat owner
+app.post("/api/flats/:apartment/:floor/:flat/assign-admin", requireAuth, requireSuperAdmin, ah(async (req, res) => {
+  const { apartment, floor, flat } = req.params;
+  const { admin_phone } = req.body; // null/empty to unassign
+  const owner = await dbGetFlatOwnerByKey(apartment, floor, flat);
+  if (!owner) return res.status(404).json({ error: "No signed-up owner found for this flat" });
+
+  if (admin_phone) {
+    const target = await dbGetUser(admin_phone);
+    if (!target || target.role !== "admin") return res.status(400).json({ error: "Target admin not found" });
+  }
+
+  await supabase.from("users").update({ managed_by: admin_phone || null }).eq("phone", owner.phone);
+  res.json({ success: true });
 }));
 
 app.get("/api/flats/:apartment/:floor/:flat", requireAuth, ah(async (req, res) => {
