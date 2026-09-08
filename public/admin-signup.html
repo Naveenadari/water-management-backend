@@ -45,6 +45,7 @@
     <div class="badgebox">🔑 Admin Account Invite</div>
 
     <div class="field"><label>Your Full Name</label><input id="name" placeholder="e.g. Naveen Kumar" /></div>
+    <div class="field"><label>Apartment Name</label><input id="apartment" placeholder="e.g. Green Meadows" /></div>
     <div class="field"><label>Phone Number (this will be your username)</label><input id="phone" placeholder="10-digit mobile number" /></div>
     <div class="field"><label>Create Password</label><input id="password" type="password" placeholder="At least 6 characters" /></div>
     <div class="field"><label>Re-enter Password</label><input id="password2" type="password" placeholder="Re-enter your password" /></div>
@@ -92,20 +93,21 @@
 
   async function submitSignup() {
     const name = document.getElementById('name').value.trim();
+    const apartment = document.getElementById('apartment').value.trim();
     const phone = document.getElementById('phone').value.trim();
     const password = document.getElementById('password').value;
     const password2 = document.getElementById('password2').value;
 
     document.getElementById('errBox').style.display = 'none';
 
-    if (!name || !phone || !password) { showErr('Please fill in all fields.'); return; }
+    if (!name || !apartment || !phone || !password) { showErr('Please fill in all fields.'); return; }
     if (password.length < 6) { showErr('Password must be at least 6 characters.'); return; }
     if (password !== password2) { showErr('Passwords do not match.'); return; }
 
     try {
       const res = await fetch('/api/auth/admin-signup-with-invite', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: inviteToken, name, phone, password })
+        body: JSON.stringify({ token: inviteToken, name, apartment, phone, password })
       });
       const data = await res.json();
       if (!res.ok) { showErr(data.error || 'Signup failed.'); return; }
