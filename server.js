@@ -82,8 +82,13 @@ async function dbCreateUser(u) {
   const { error } = await supabase.from("users").insert({
     phone: u.phone, role: u.role, name: u.name, salt: u.salt, password_hash: u.passwordHash,
     apartment: u.apartment || null, floor: u.floor || null, flat: u.flat || null,
+    managed_by: u.managedBy || null,
   });
   if (error) throw error;
+}
+async function dbGetAllAdmins() {
+  const { data } = await supabase.from("users").select("*").eq("role", "admin");
+  return data || [];
 }
 async function dbUpdateUserPassword(phone, salt, passwordHash) {
   await supabase.from("users").update({ salt, password_hash: passwordHash }).eq("phone", phone);
@@ -112,12 +117,16 @@ async function dbGetSessionPhone(token) {
 }
 async function dbDeleteSessionsForPhone(phone) { await supabase.from("sessions").delete().eq("phone", phone); }
 
-async function dbCreateFlatInvite(token, apartment, floor, flat) {
-  await supabase.from("flat_invites").insert({ token, apartment, floor, flat });
+async function dbCreateFlatInvite(token, apartment, floor, flat, createdBy) {
+  await supabase.from("flat_invites").insert({ token, apartment, floor, flat, created_by: createdBy || null });
 }
 async function dbGetFlatInvite(token) {
   const { data } = await supabase.from("flat_invites").select("*").eq("token", token).maybeSingle();
   return data;
+}
+async function dbGetUnusedFlatInvites() {
+  const { data } = await supabase.from("flat_invites").select("*").eq("used", false);
+  return data || [];
 }
 async function dbMarkFlatInviteUsed(token) { await supabase.from("flat_invites").update({ used: true }).eq("token", token); }
 
@@ -360,22 +369,22 @@ app.get("/api/admin-invites/:token", ah(async (req, res) => {
 }));
 
 app.post("/api/auth/admin-signup-with-invite", ah(async (req, res) => {
-  const { token, name, phone, password } = req.body;
+  const { token, name, phone, password, apartment } = req.body;
   const invite = await dbGetAdminInvite(token);
 
   if (!invite) return res.status(404).json({ error: "Invalid or expired invite link" });
   if (invite.used) return res.status(410).json({ error: "This invite link has already been used" });
-  if (!name || !phone || !password) return res.status(400).json({ error: "Missing required fields" });
+  if (!name || !phone || !password || !apartment) return res.status(400).json({ error: "Missing required fields" });
   if (await dbGetUser(phone)) return res.status(409).json({ error: "An account with this phone number already exists" });
 
   const salt = crypto.randomBytes(16).toString("hex");
   const passwordHash = hashPassword(password, salt);
-  await dbCreateUser({ role: "admin", name, phone, salt, passwordHash });
+  await dbCreateUser({ role: "admin", name, phone, salt, passwordHash, apartment });
   await dbMarkAdminInviteUsed(token);
 
   const authToken = makeToken();
   await dbCreateSession(authToken, phone);
-  res.json({ success: true, token: authToken, user: { role: "admin", name, phone, apartment: null, floor: null, flat: null } });
+  res.json({ success: true, token: authToken, user: { role: "admin", name, phone, apartment, floor: null, flat: null } });
 }));
 
 // ---------------- INVITE-BASED FLAT OWNER SIGNUP ----------------
@@ -388,7 +397,7 @@ app.post("/api/invites", requireAuth, requireAdmin, ah(async (req, res) => {
   if (existingOwner) return res.status(409).json({ error: "This flat already has an owner account. Delete it first to re-invite." });
 
   const token = crypto.randomBytes(12).toString("hex");
-  await dbCreateFlatInvite(token, apartment, floor, flat);
+  await dbCreateFlatInvite(token, apartment, floor, flat, req.user.phone);
   res.json({ success: true, token, apartment, floor, flat });
 }));
 
@@ -410,7 +419,7 @@ app.post("/api/auth/signup-with-invite", ah(async (req, res) => {
 
   const salt = crypto.randomBytes(16).toString("hex");
   const passwordHash = hashPassword(password, salt);
-  await dbCreateUser({ role: "flat_owner", name, phone, salt, passwordHash, apartment: invite.apartment, floor: invite.floor, flat: invite.flat });
+  await dbCreateUser({ role: "flat_owner", name, phone, salt, passwordHash, apartment: invite.apartment, floor: invite.floor, flat: invite.flat, managedBy: invite.created_by });
   await dbMarkFlatInviteUsed(token);
 
   const authToken = makeToken();
@@ -435,11 +444,28 @@ app.post("/api/users/:apartment/:floor/:flat/reset-password", requireAuth, requi
 // Admin deletes a flat owner's account
 app.delete("/api/users/:apartment/:floor/:flat", requireAuth, requireAdmin, ah(async (req, res) => {
   const { apartment, floor, flat } = req.params;
+  const key = keyFor(apartment, floor, flat);
   const owner = await dbGetFlatOwnerByKey(apartment, floor, flat);
-  if (!owner) return res.status(404).json({ error: "No account found for this flat" });
 
-  await dbDeleteUser(owner.phone);
-  await dbDeleteSessionsForPhone(owner.phone);
+  if (owner) {
+    await dbDeleteUser(owner.phone);
+    await dbDeleteSessionsForPhone(owner.phone);
+  }
+
+  // Purge all stored data for this flat key so it fully disappears from the dashboard,
+  // whether or not anyone had actually signed up yet.
+  await supabase.from("flats_data").delete().eq("key", key);
+  await supabase.from("readings_history").delete().eq("key", key);
+  await supabase.from("daily_usage").delete().eq("key", key);
+  await supabase.from("subscriptions").delete().eq("key", key);
+  await supabase.from("limits").delete().eq("key", key);
+  await supabase.from("flat_config").delete().eq("key", key);
+  await supabase.from("notifications").delete().eq("key", key);
+  await supabase.from("previous_total").delete().eq("key", key);
+  await supabase.from("alerts_sent").delete().eq("key", key);
+  await supabase.from("sub_alert_sent").delete().eq("key", key);
+  await supabase.from("flat_invites").delete().eq("apartment", apartment).eq("floor", floor).eq("flat", flat).eq("used", false);
+
   res.json({ success: true });
 }));
 
@@ -542,11 +568,23 @@ app.post("/api/flat-config/:apartment/:floor/:flat", requireAuth, requireAdmin, 
 }));
 
 app.get("/api/flats", requireAuth, requireAdmin, ah(async (req, res) => {
-  const [allFlatsData, owners] = await Promise.all([dbGetAllFlatsData(), dbGetAllFlatOwners()]);
+  // Which admin's flats to show: a regular admin always sees only their own;
+  // a super admin sees everything by default, or a specific admin's flats via ?admin_phone=
+  const scopeToAdmin = req.user.role === "admin" ? req.user.phone : (req.query.admin_phone || null);
+
+  const [allFlatsData, owners, pendingInvites] = await Promise.all([
+    dbGetAllFlatsData(), dbGetAllFlatOwners(), dbGetUnusedFlatInvites(),
+  ]);
+
+  const scopedOwners = scopeToAdmin ? owners.filter((u) => u.managed_by === scopeToAdmin) : owners;
+  const scopedInvites = scopeToAdmin ? pendingInvites.filter((i) => i.created_by === scopeToAdmin) : pendingInvites;
+  const ownerKeys = new Set(owners.map((u) => keyFor(u.apartment, u.floor, u.flat)));
 
   const keysSet = new Set([
-    ...allFlatsData.map((f) => f.key),
-    ...owners.map((u) => keyFor(u.apartment, u.floor, u.flat)),
+    ...scopedOwners.map((u) => keyFor(u.apartment, u.floor, u.flat)),
+    ...scopedInvites.map((i) => keyFor(i.apartment, i.floor, i.flat)),
+    // include raw device data only when unscoped (super admin, no filter) since we can't attribute it to an admin otherwise
+    ...(scopeToAdmin ? [] : allFlatsData.filter((f) => !ownerKeys.has(f.key)).map((f) => f.key)),
   ]);
 
   const result = await Promise.all([...keysSet].map(async (key) => {
@@ -571,6 +609,21 @@ app.get("/api/flats", requireAuth, requireAdmin, ah(async (req, res) => {
       limit,
     };
   }));
+
+  res.json(result);
+}));
+
+// Super admin: list all apartment admins, with a quick flat-count summary for each
+app.get("/api/admins", requireAuth, requireSuperAdmin, ah(async (req, res) => {
+  const [admins, owners] = await Promise.all([dbGetAllAdmins(), dbGetAllFlatOwners()]);
+
+  const result = admins.map((a) => {
+    const theirFlats = owners.filter((u) => u.managed_by === a.phone);
+    return {
+      name: a.name, phone: a.phone, apartment: a.apartment, created_at: a.created_at,
+      total_flats: theirFlats.length,
+    };
+  });
 
   res.json(result);
 }));
