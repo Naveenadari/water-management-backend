@@ -105,7 +105,7 @@
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
       <div>
         <label style="font-size:11px;color:#94a3b8;">Apartment</label><br/>
-        <input class="limitInput" id="inviteApartment" value="greenmeadows" style="width:130px;" />
+        <input class="limitInput" id="inviteApartment" placeholder="apartment name" style="width:130px;" />
       </div>
       <div>
         <label style="font-size:11px;color:#94a3b8;">Floor</label><br/>
@@ -178,7 +178,7 @@
 
       body.innerHTML = admins.map(a => `
         <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #0f172a; cursor:pointer;" onclick="filterByAdmin('${a.phone}','${a.name}')">
-          <div><b style="color:#fff;">${a.name}</b> <span style="color:#64748b; font-size:11px;">· ${a.phone}</span></div>
+          <div><b style="color:#fff;">${a.name}</b> <span style="color:#64748b; font-size:11px;">· ${a.apartment || 'no apartment set'} · ${a.phone}</span></div>
           <div style="color:#22d3ee; font-size:12px;">${a.total_flats} flat(s) →</div>
         </div>
       `).join('');
@@ -196,6 +196,13 @@
     filterAdminPhone = null;
     document.getElementById('viewingAdminBanner').classList.add('hidden');
     loadFlats();
+  }
+
+  if (user.role === 'admin' && user.apartment) {
+    const apField = document.getElementById('inviteApartment');
+    apField.value = user.apartment;
+    apField.readOnly = true;
+    apField.style.opacity = '0.7';
   }
 
   async function createAdminInvite() {
