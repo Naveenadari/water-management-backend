@@ -144,6 +144,7 @@
 
 <script>
   let flatsCache = [];
+  let adminListCache = [];
   let navView = 'floors';   // 'floors' | 'flats' | 'detail'
   let navFloor = null;
   let navFlatKey = null;
@@ -173,16 +174,37 @@
     try {
       const res = await fetch('/api/admins', { headers: authHeaders() });
       const admins = await res.json();
+      adminListCache = admins;
       const body = document.getElementById('adminListBody');
       if (admins.length === 0) { body.textContent = 'No apartment admins invited yet.'; return; }
 
       body.innerHTML = admins.map(a => `
-        <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #0f172a; cursor:pointer;" onclick="filterByAdmin('${a.phone}','${a.name}')">
-          <div><b style="color:#fff;">${a.name}</b> <span style="color:#64748b; font-size:11px;">· ${a.apartment || 'no apartment set'} · ${a.phone}</span></div>
-          <div style="color:#22d3ee; font-size:12px;">${a.total_flats} flat(s) →</div>
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #0f172a;">
+          <div style="cursor:pointer; flex:1;" onclick="filterByAdmin('${a.phone}','${a.name}')">
+            <b style="color:#fff;">${a.name}</b> <span style="color:#64748b; font-size:11px;">· ${a.apartment || 'no apartment set'} · ${a.phone}</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span style="color:#22d3ee; font-size:12px; cursor:pointer;" onclick="filterByAdmin('${a.phone}','${a.name}')">${a.total_flats} flat(s) →</span>
+            <button class="act delete" onclick="deleteAdmin('${a.phone}','${a.name}')">Delete</button>
+          </div>
         </div>
       `).join('');
     } catch (e) { /* silent */ }
+  }
+
+  async function deleteAdmin(phone, name) {
+    if (!confirm(`Delete admin "${name}"? This does not delete their flat owners' accounts, but removes their admin access.`)) return;
+    try {
+      const res = await fetch(`/api/admins/${phone}`, { method: 'DELETE', headers: authHeaders() });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert('Failed: ' + (data.error || res.status));
+        return;
+      }
+      loadAdminList();
+    } catch (e) {
+      alert('Could not reach server: ' + e.message);
+    }
   }
 
   function filterByAdmin(phone, name) {
@@ -380,6 +402,27 @@
     const locked = '<span class="flatsub">🔒 Payment pending</span>';
     const isOpen = f.valve_status === 'OPEN';
 
+    let assignBlock = '';
+    if (user.role === 'super_admin' && f.owner_name) {
+      const currentAdmin = adminListCache.find(a => a.phone === f.managed_by);
+      const orphanNote = f.managed_by && !currentAdmin
+        ? `<div style="font-size:11px; color:#fca5a5; margin-bottom:6px;">⚠️ Previously managed admin no longer exists</div>` : '';
+      const options = ['<option value="">— Unassigned —</option>']
+        .concat(adminListCache.map(a => `<option value="${a.phone}" ${a.phone === f.managed_by ? 'selected' : ''}>${a.name} (${a.apartment || 'no apartment'})</option>`));
+      assignBlock = `
+        <div style="margin-bottom:14px;">
+          <div style="font-size:12px; color:#94a3b8; margin-bottom:6px;">Managed By Admin:</div>
+          ${orphanNote}
+          <div class="btns">
+            <select id="assignAdminSelect-${f.apartment}-${f.floor}-${f.flat}" style="background:#0f172a; color:#fff; border:1px solid #334155; border-radius:6px; padding:6px 8px; font-size:11px;">
+              ${options.join('')}
+            </select>
+            <button class="act limit" onclick="assignAdmin('${f.apartment}','${f.floor}','${f.flat}')">Save</button>
+          </div>
+        </div>
+      `;
+    }
+
     document.getElementById('navArea').innerHTML = `
       <div class="card">
         <div class="flatname" style="font-size:16px; margin-bottom:2px;">Flat ${f.flat}</div>
@@ -396,6 +439,8 @@
           <div class="card"><b>${paid ? (f.today_usage || 0).toFixed(1) : '🔒'}</b><small>Today (L)</small></div>
           <div class="card"><b>${paid ? (f.total_liters || 0).toFixed(1) : '🔒'}</b><small>Total (L)</small></div>
         </div>
+
+        ${assignBlock}
 
         <div style="margin-bottom:14px;">
           <div style="font-size:12px; color:#94a3b8; margin-bottom:6px;">Daily Limit: ${paid ? limitBadge(f) : locked}</div>
@@ -422,6 +467,24 @@
         </div>
       </div>
     `;
+  }
+
+  async function assignAdmin(apartment, floor, flat) {
+    const select = document.getElementById(`assignAdminSelect-${apartment}-${floor}-${flat}`);
+    const admin_phone = select.value || null;
+    try {
+      const res = await fetch(`/api/flats/${apartment}/${floor}/${flat}/assign-admin`, {
+        method: 'POST', headers: authHeaders(), body: JSON.stringify({ admin_phone })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert('Failed: ' + (data.error || res.status));
+        return;
+      }
+      loadFlats();
+    } catch (e) {
+      alert('Could not reach server: ' + e.message);
+    }
   }
 
   async function toggleValveFitted(apartment, floor, flat, newHasValve) {
