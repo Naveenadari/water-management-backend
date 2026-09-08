@@ -626,6 +626,23 @@ app.delete("/api/admins/:phone", requireAuth, requireSuperAdmin, ah(async (req, 
   res.json({ success: true });
 }));
 
+// Admin sets (or updates) their apartment's building layout template
+app.post("/api/building-layout", requireAuth, requireAdmin, ah(async (req, res) => {
+  const { floors, flats_per_floor } = req.body;
+  const f = parseInt(floors, 10), fpf = parseInt(flats_per_floor, 10);
+  if (!f || f < 1 || !fpf || fpf < 1) return res.status(400).json({ error: "Enter valid floors and flats-per-floor numbers" });
+
+  await supabase.from("building_layout").upsert({ admin_phone: req.user.phone, floors: f, flats_per_floor: fpf });
+  res.json({ success: true, floors: f, flats_per_floor: fpf });
+}));
+
+// Get a building layout — admin's own, or (for super admin) a specific admin's via ?admin_phone=
+app.get("/api/building-layout", requireAuth, requireAdmin, ah(async (req, res) => {
+  const targetPhone = req.user.role === "super_admin" ? (req.query.admin_phone || req.user.phone) : req.user.phone;
+  const { data } = await supabase.from("building_layout").select("*").eq("admin_phone", targetPhone).maybeSingle();
+  res.json(data || { floors: 0, flats_per_floor: 0 });
+}));
+
 app.get("/api/admins", requireAuth, requireSuperAdmin, ah(async (req, res) => {
   const [admins, owners] = await Promise.all([dbGetAllAdmins(), dbGetAllFlatOwners()]);
 
