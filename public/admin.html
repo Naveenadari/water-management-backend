@@ -400,7 +400,11 @@
       return;
     }
 
-    document.getElementById('navBreadcrumb').textContent = 'Floors';
+    if (user.role === 'super_admin' && filterAdminPhone) {
+      document.getElementById('navBreadcrumb').innerHTML = `<a style="color:#22d3ee; cursor:pointer;" onclick="clearAdminFilter()">← All Admins</a> / Floors`;
+    } else {
+      document.getElementById('navBreadcrumb').textContent = 'Floors';
+    }
 
     if (layoutCache.floors > 0) {
       const floorNames = [];
