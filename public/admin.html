@@ -92,7 +92,10 @@
   </div>
 
   <div id="adminListCard" class="card hidden" style="margin-top:8px; border-color:rgba(251,191,36,0.4);">
-    <div style="font-size:13px; font-weight:600; color:#fcd34d; margin-bottom:10px;">📋 Apartment Admins</div>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <div style="font-size:13px; font-weight:600; color:#fcd34d;">📋 Apartment Admins</div>
+      <button class="refresh" style="padding:4px 10px; font-size:11px;" onclick="loadAdminList()">↻ Refresh</button>
+    </div>
     <div id="adminListBody" style="font-size:13px;">Loading…</div>
     <div id="viewingAdminBanner" class="hidden" style="margin-top:10px; font-size:12px; background:rgba(34,211,238,0.1); border:1px solid rgba(34,211,238,0.3); border-radius:10px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
       <span id="viewingAdminText"></span>
@@ -152,7 +155,7 @@
   </div>
 
   <div class="toolbar" style="align-items:center; justify-content:space-between;">
-    <button class="refresh" onclick="loadFlats()">↻ Refresh</button>
+    <button class="refresh" onclick="refreshAll()">↻ Refresh</button>
     <button class="act limit" id="paySelectedBtn" style="display:none;" onclick="paySelected()">Pay Selected (₹0)</button>
   </div>
 
@@ -325,6 +328,11 @@
     if (pct >= 100) return `<span class="badge danger">${pct.toFixed(0)}% (over)</span>`;
     if (pct >= 80) return `<span class="badge warn">${pct.toFixed(0)}%</span>`;
     return `<span class="badge open">${pct.toFixed(0)}%</span>`;
+  }
+
+  function refreshAll() {
+    loadFlats();
+    if (user.role === 'super_admin') loadAdminList();
   }
 
   async function loadFlats() {
@@ -813,6 +821,7 @@
   loadAlerts();
   setInterval(loadFlats, 10000);
   setInterval(loadAlerts, 15000);
+  if (user.role === 'super_admin') setInterval(loadAdminList, 10000);
 
   // ---------------- PWA INSTALL PROMPT ----------------
   let deferredInstallPrompt = null;
