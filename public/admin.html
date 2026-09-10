@@ -72,6 +72,7 @@
 
   <div class="stats">
     <div class="card"><b id="statFlats">—</b><small>Total Flats</small></div>
+    <div class="card hidden" id="statAdminsCard"><b id="statAdmins" style="color:#fcd34d;">—</b><small>Total Admins</small></div>
     <div class="card"><b id="statPaid" style="color:#6ee7b7;">—</b><small>Payments Done</small></div>
     <div class="card"><b id="statPending" style="color:#fcd34d;">—</b><small>Payments Pending</small></div>
     <div class="card"><b id="statOpen">—</b><small>Valves Open</small></div>
@@ -196,7 +197,7 @@
   const isSuperAdmin = (user.role === 'super_admin');
 
   function applyRoleVisibility() {
-    const superOnlyIds = ['superAdminCard', 'adminListCard', 'trialSettingsCard', 'supportContactCard'];
+    const superOnlyIds = ['superAdminCard', 'adminListCard', 'trialSettingsCard', 'supportContactCard', 'statAdminsCard'];
     superOnlyIds.forEach(id => {
       document.getElementById(id).classList.toggle('hidden', !isSuperAdmin);
     });
@@ -249,6 +250,7 @@
       const res = await fetch('/api/admins', { headers: authHeaders() });
       const admins = await res.json();
       adminListCache = admins;
+      document.getElementById('statAdmins').textContent = admins.length;
       const body = document.getElementById('adminListBody');
 
       const unassignedRow = `
