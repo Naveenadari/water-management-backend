@@ -53,6 +53,7 @@
   .act.delete { background:#7f1d1d; color:#fecaca; }
   .refresh { background:none; border:1px solid #334155; color:#cbd5e1; border-radius:10px; padding:8px 14px; cursor:pointer; font-size:12px; }
   .toolbar { display:flex; gap:8px; margin-top:16px; }
+  .hidden { display: none !important; }
 </style>
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 </head>
@@ -127,24 +128,6 @@
     </div>
   </div>
 
-  <div id="layoutCard" class="card hidden" style="margin-top:8px;">
-    <div style="font-size:13px; font-weight:600; color:#fff; margin-bottom:10px;">🏢 Building Layout</div>
-    <div id="layoutStatus" style="font-size:12px; color:#94a3b8; margin-bottom:10px;"></div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
-      <div>
-        <label style="font-size:11px;color:#94a3b8;">Number of Floors</label><br/>
-        <input class="limitInput" id="layoutFloors" type="number" placeholder="e.g. 3" style="width:110px;" />
-      </div>
-      <div>
-        <label style="font-size:11px;color:#94a3b8;">Flats per Floor</label><br/>
-        <input class="limitInput" id="layoutFlatsPerFloor" type="number" placeholder="e.g. 5" style="width:110px;" />
-      </div>
-      <button class="act limit" onclick="saveBuildingLayout()">Save Layout</button>
-    </div>
-    <div style="font-size:11px; color:#64748b; margin-top:8px;">
-      This generates flat numbers like 101–105 for floor1, 201–205 for floor2, and so on — so all flats appear in order even before you invite anyone.
-    </div>
-  </div>
 
   <div class="card" style="margin-top:8px;">
     <div style="font-size:13px; font-weight:600; color:#fff; margin-bottom:10px;">➕ Invite a New Flat Owner</div>
@@ -191,7 +174,6 @@
 <script>
   let flatsCache = [];
   let adminListCache = [];
-  let layoutCache = { floors: 0, flats_per_floor: 0 };
   let navView = 'floors';   // 'floors' | 'flats' | 'detail'
   let navFloor = null;
   let navFlatKey = null;
@@ -211,17 +193,20 @@
 
   let filterAdminPhone = null;
 
-  if (user.role === 'super_admin') {
-    document.getElementById('superAdminCard').classList.remove('hidden');
-    document.getElementById('adminListCard').classList.remove('hidden');
-    document.getElementById('trialSettingsCard').classList.remove('hidden');
-    document.getElementById('supportContactCard').classList.remove('hidden');
+  const isSuperAdmin = (user.role === 'super_admin');
+
+  function applyRoleVisibility() {
+    const superOnlyIds = ['superAdminCard', 'adminListCard', 'trialSettingsCard', 'supportContactCard'];
+    superOnlyIds.forEach(id => {
+      document.getElementById(id).style.display = isSuperAdmin ? '' : 'none';
+    });
+  }
+  applyRoleVisibility();
+
+  if (isSuperAdmin) {
     loadAdminList();
     loadTrialDays();
-  } else {
-    document.getElementById('layoutCard').classList.remove('hidden');
   }
-  loadBuildingLayout();
 
   async function loadTrialDays() {
     try {
@@ -256,36 +241,6 @@
       const data = await res.json();
       if (!res.ok) { alert(data.error || 'Could not save.'); return; }
       loadTrialDays();
-    } catch (e) { alert('Could not reach server.'); }
-  }
-
-  async function loadBuildingLayout() {
-    try {
-      const url = filterAdminPhone ? `/api/building-layout?admin_phone=${filterAdminPhone}` : '/api/building-layout';
-      const res = await fetch(url, { headers: authHeaders() });
-      const data = await res.json();
-      layoutCache = data;
-      if (user.role === 'admin') {
-        document.getElementById('layoutFloors').value = data.floors || '';
-        document.getElementById('layoutFlatsPerFloor').value = data.flats_per_floor || '';
-        document.getElementById('layoutStatus').textContent = data.floors
-          ? `Current layout: ${data.floors} floor(s) × ${data.flats_per_floor} flat(s) each`
-          : 'No layout set yet — set one below.';
-      }
-      renderNav();
-    } catch (e) { /* silent */ }
-  }
-
-  async function saveBuildingLayout() {
-    const floors = document.getElementById('layoutFloors').value;
-    const flats_per_floor = document.getElementById('layoutFlatsPerFloor').value;
-    try {
-      const res = await fetch('/api/building-layout', {
-        method: 'POST', headers: authHeaders(), body: JSON.stringify({ floors, flats_per_floor })
-      });
-      const data = await res.json();
-      if (!res.ok) { alert(data.error || 'Could not save layout.'); return; }
-      loadBuildingLayout();
     } catch (e) { alert('Could not reach server.'); }
   }
 
@@ -331,14 +286,12 @@
     filterAdminPhone = phone;
     document.getElementById('viewingAdminText').textContent = `Showing flats managed by: ${name}`;
     document.getElementById('viewingAdminBanner').classList.remove('hidden');
-    loadBuildingLayout();
     loadFlats();
   }
 
   function clearAdminFilter() {
     filterAdminPhone = null;
     document.getElementById('viewingAdminBanner').classList.add('hidden');
-    layoutCache = { floors: 0, flats_per_floor: 0 };
     loadFlats();
   }
 
@@ -449,15 +402,6 @@
     return renderFloorsView();
   }
 
-  function getLayoutApartmentName() {
-    if (user.role === 'admin') return user.apartment;
-    if (filterAdminPhone) {
-      const a = adminListCache.find(x => x.phone === filterAdminPhone);
-      return a ? a.apartment : 'apartment';
-    }
-    return 'apartment';
-  }
-
   function renderFloorsView() {
     navView = 'floors'; navFloor = null; navFlatKey = null;
 
@@ -478,29 +422,8 @@
       document.getElementById('navBreadcrumb').textContent = 'Floors';
     }
 
-    if (layoutCache.floors > 0) {
-      const floorNames = [];
-      for (let i = 1; i <= layoutCache.floors; i++) floorNames.push('floor' + i);
-
-      area.innerHTML = floorNames.map(fl => {
-        const flatsHere = flatsCache.filter(f => f.floor === fl);
-        const paid = flatsHere.filter(f => f.subscription_active).length;
-        return `
-          <div class="card" style="margin-bottom:10px; cursor:pointer;" onclick="openFloor('${fl}')">
-            <div class="row">
-              <div>
-                <div class="flatname" style="font-size:15px;">${fl}</div>
-                <div class="flatsub">${layoutCache.flats_per_floor} flat(s) · ${paid} paid</div>
-              </div>
-              <div style="color:#22d3ee; font-size:18px;">→</div>
-            </div>
-          </div>
-        `;
-      }).join('');
-      return;
-    }
-
-    // Fallback: no layout configured — derive floor list from whatever real data exists
+    // Floors are derived purely from flats that have actually been invited so far —
+    // every building's floor/flat numbering is different, so there's no fixed pattern to assume.
     const floors = {};
     flatsCache.forEach(f => {
       if (!floors[f.floor]) floors[f.floor] = [];
@@ -542,50 +465,9 @@
   function renderFlatsView() {
     document.getElementById('navBreadcrumb').innerHTML = `<a style="color:#22d3ee; cursor:pointer;" onclick="renderFloorsView()">← Floors</a> / ${navFloor}`;
     const area = document.getElementById('navArea');
-    const apartmentName = getLayoutApartmentName();
 
-    if (layoutCache.floors > 0) {
-      const floorNum = floorSortKey(navFloor);
-      const expectedFlats = [];
-      for (let i = 1; i <= layoutCache.flats_per_floor; i++) expectedFlats.push(String(floorNum * 100 + i));
-
-      area.innerHTML = expectedFlats.map(flatNo => {
-        const f = flatsCache.find(x => x.floor === navFloor && x.flat === flatNo);
-        if (!f) {
-          return `
-            <div class="card" style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
-              <div>
-                <div class="flatname">Flat ${flatNo}</div>
-                <div class="flatsub">Not invited yet</div>
-              </div>
-              <button class="act limit" onclick="quickInvite('${apartmentName}','${navFloor}','${flatNo}')">Invite</button>
-            </div>
-          `;
-        }
-        const paid = f.subscription_active;
-        const key = `${f.apartment}|${f.floor}|${f.flat}`;
-        return `
-          <div class="card" style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
-            <div style="display:flex; align-items:center; gap:10px; cursor:pointer; flex:1;" onclick="openFlat('${key}')">
-              ${!paid && f.owner_name ? `<input type="checkbox" class="payCheckbox" data-key="${key}" onclick="event.stopPropagation()" onchange="updatePaySelected()" />` : ''}
-              ${f.owner_name ? avatarHtml(f.owner_pic) : ''}
-              <div>
-                <div class="flatname">Flat ${f.flat}</div>
-                <div class="flatsub">${f.owner_name || 'Not signed up'}</div>
-              </div>
-            </div>
-            <div style="display:flex; align-items:center; gap:10px;">
-              ${paid ? '<span class="badge open">Paid</span>' : '<span class="badge warn">Pending</span>'}
-              ${f.has_valve !== false ? `<span class="badge ${f.valve_status === 'OPEN' ? 'open' : 'closed'}">${f.valve_status === 'OPEN' ? 'Open' : 'Closed'}</span>` : '<span class="badge closed">No Valve</span>'}
-              <span style="color:#64748b;">→</span>
-            </div>
-          </div>
-        `;
-      }).join('');
-      return;
-    }
-
-    // Fallback: no layout configured — only show flats that actually exist
+    // Flats shown here are only ones actually invited so far via "Invite a New Flat Owner" —
+    // no fixed numbering pattern is assumed since every building differs.
     const flats = flatsCache.filter(f => f.floor === navFloor).sort((a, b) => flatSortKey(a.flat) - flatSortKey(b.flat));
 
     area.innerHTML = flats.map(f => {
@@ -611,13 +493,7 @@
     }).join('');
   }
 
-  function quickInvite(apartment, floor, flat) {
-    document.getElementById('inviteApartment').value = apartment;
-    document.getElementById('inviteFloor').value = floor;
-    document.getElementById('inviteFlat').value = flat;
-    createInvite();
-    document.getElementById('inviteResult').scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
+
 
   function openFlat(key) {
     navView = 'detail'; navFlatKey = key;
