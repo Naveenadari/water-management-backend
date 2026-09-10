@@ -264,13 +264,27 @@
     </div>
   </div>
 
+  <div id="screen-profile" class="hidden px" style="padding-top:24px;">
+    <h1 style="margin-bottom:16px;">Profile</h1>
+    <div class="card" style="margin-bottom:14px;">
+      <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:4px;" id="profileName">—</div>
+      <div style="font-size:12px;color:#94a3b8;" id="profileMeta">—</div>
+    </div>
+    <div class="card" style="margin-bottom:14px;">
+      <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:10px;">💳 Payment Details</div>
+      <div id="paymentDetailsBody" style="font-size:13px; color:#cbd5e1;">Loading…</div>
+      <button class="qa" id="btnRecharge" style="display:none; width:100%; margin-top:12px; border-radius:12px; font-size:13px;" onclick="rechargeFromProfile()">Recharge Now</button>
+    </div>
+    <button class="qa" style="width:100%; border-radius:12px; font-size:13px; color:#fca5a5;" onclick="logout()">Logout</button>
+  </div>
+
   <div class="navwrap">
     <div class="nav">
       <button class="navitem active" id="navHome" onclick="showScreen('home')">🏠<span>Home</span></button>
       <button class="navitem" id="navAnalytics" onclick="showScreen('analytics')">📊<span>Analytics</span></button>
       <button class="navcore" onclick="showScreen('home')">💧</button>
       <button class="navitem" onclick="sendValve(currentValveOpen ? 'CLOSE' : 'OPEN')">⏻<span>Control</span></button>
-      <button class="navitem" onclick="logout()">👤<span>Profile</span></button>
+      <button class="navitem" id="navProfile" onclick="showScreen('profile')">👤<span>Profile</span></button>
     </div>
   </div>
   </div><!-- /appContent -->
@@ -390,7 +404,7 @@
     try {
       const res = await fetch('/api/payment/create-order', { method: 'POST', headers: authHeaders() });
       const order = await res.json();
-      if (!res.ok) { msgBox.textContent = order.error || 'Could not start payment.'; return; }
+      if (!res.ok) { msgBox.textContent = order.error || 'Could not start payment.'; alert(order.error || 'Could not start payment.'); return; }
 
       const options = {
         key: order.key_id,
@@ -410,10 +424,13 @@
               msgBox.textContent = '';
               checkSubscription();
               loadFlatData();
+              loadPaymentDetails();
+              alert('Payment successful!');
             } else {
               msgBox.textContent = verifyData.error || 'Payment verification failed.';
+              alert(verifyData.error || 'Payment verification failed.');
             }
-          } catch (e) { msgBox.textContent = 'Could not verify payment.'; }
+          } catch (e) { msgBox.textContent = 'Could not verify payment.'; alert('Could not verify payment.'); }
         },
         theme: { color: '#22d3ee' },
         modal: { ondismiss: function () { msgBox.textContent = ''; } }
@@ -423,6 +440,7 @@
       rzp.open();
     } catch (e) {
       msgBox.textContent = 'Could not reach the server.';
+      alert('Could not reach the server.');
     }
   }
 
@@ -446,9 +464,66 @@
   function showScreen(name) {
     document.getElementById('screen-home').classList.toggle('hidden', name !== 'home');
     document.getElementById('screen-analytics').classList.toggle('hidden', name !== 'analytics');
+    document.getElementById('screen-profile').classList.toggle('hidden', name !== 'profile');
     document.getElementById('navHome').classList.toggle('active', name === 'home');
     document.getElementById('navAnalytics').classList.toggle('active', name === 'analytics');
+    document.getElementById('navProfile').classList.toggle('active', name === 'profile');
     if (name === 'analytics') loadUsageChart();
+    if (name === 'profile') loadProfile();
+  }
+
+  function loadProfile() {
+    if (!authUser) return;
+    document.getElementById('profileName').textContent = authUser.name || 'Flat Owner';
+    document.getElementById('profileMeta').textContent = `${authUser.apartment} · ${authUser.floor} · Flat ${authUser.flat} · ${authUser.phone}`;
+    loadPaymentDetails();
+  }
+
+  async function loadPaymentDetails() {
+    const body = document.getElementById('paymentDetailsBody');
+    const btn = document.getElementById('btnRecharge');
+    try {
+      const res = await fetch(`/api/flats/${authUser.apartment}/${authUser.floor}/${authUser.flat}`, { headers: authHeaders() });
+      const data = await res.json();
+      const sub = data.subscription;
+      if (!sub) { body.textContent = 'Could not load subscription details.'; return; }
+
+      const validDate = new Date(sub.valid_until).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+      if (sub.is_trial) {
+        body.innerHTML = `
+          <div style="display:flex; align-items:center; gap:8px; background:rgba(34,211,238,0.1); border:1px solid rgba(34,211,238,0.3); border-radius:10px; padding:10px 12px; margin-bottom:10px;">
+            🎁 <b style="color:#22d3ee;">Free trial — ${sub.days_remaining} day(s) left</b>
+          </div>
+          <div style="color:#94a3b8; font-size:12px;">Trial ends: ${validDate}</div>
+        `;
+        btn.textContent = 'Subscribe Now';
+      } else if (data.subscription_active) {
+        body.innerHTML = `
+          <div style="display:flex; align-items:center; gap:8px; background:rgba(52,211,153,0.1); border:1px solid rgba(52,211,153,0.3); border-radius:10px; padding:10px 12px; margin-bottom:10px;">
+            ✅ <b style="color:#6ee7b7;">Subscription Active</b>
+          </div>
+          <div style="color:#94a3b8; font-size:12px;">Valid until: ${validDate}</div>
+        `;
+        btn.textContent = 'Recharge Now (Early Renewal)';
+      } else {
+        body.innerHTML = `
+          <div style="display:flex; align-items:center; gap:8px; background:rgba(248,113,113,0.1); border:1px solid rgba(248,113,113,0.3); border-radius:10px; padding:10px 12px; margin-bottom:10px;">
+            🔒 <b style="color:#fca5a5;">Subscription Expired</b>
+          </div>
+          <div style="color:#94a3b8; font-size:12px;">Recharge now to unlock your water data and valve control.</div>
+        `;
+        btn.textContent = 'Recharge Now';
+      }
+      btn.style.display = 'block';
+    } catch (e) {
+      body.textContent = 'Could not reach server.';
+    }
+  }
+
+  function rechargeFromProfile() {
+    showScreen('home');
+    startPayment();
   }
 
   function authHeaders() {
