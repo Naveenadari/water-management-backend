@@ -91,6 +91,18 @@
     <div id="adminInviteError" class="errbox" style="display:none; margin-top:10px;"></div>
   </div>
 
+  <div id="trialSettingsCard" class="card hidden" style="margin-top:8px; border-color:rgba(251,191,36,0.4);">
+    <div style="font-size:13px; font-weight:600; color:#fcd34d; margin-bottom:10px;">🎁 Free Trial Settings</div>
+    <div style="display:flex; gap:8px; align-items:flex-end;">
+      <div>
+        <label style="font-size:11px;color:#94a3b8;">Free Trial Days (for new flat owners)</label><br/>
+        <input class="limitInput" id="trialDaysInput" type="number" placeholder="e.g. 7" style="width:110px;" />
+      </div>
+      <button class="act limit" onclick="saveTrialDays()">Save</button>
+    </div>
+    <div id="trialDaysStatus" style="font-size:11px; color:#64748b; margin-top:8px;"></div>
+  </div>
+
   <div id="adminListCard" class="card hidden" style="margin-top:8px; border-color:rgba(251,191,36,0.4);">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
       <div style="font-size:13px; font-weight:600; color:#fcd34d;">📋 Apartment Admins</div>
@@ -190,11 +202,34 @@
   if (user.role === 'super_admin') {
     document.getElementById('superAdminCard').classList.remove('hidden');
     document.getElementById('adminListCard').classList.remove('hidden');
+    document.getElementById('trialSettingsCard').classList.remove('hidden');
     loadAdminList();
+    loadTrialDays();
   } else {
     document.getElementById('layoutCard').classList.remove('hidden');
   }
   loadBuildingLayout();
+
+  async function loadTrialDays() {
+    try {
+      const res = await fetch('/api/config', { headers: authHeaders() });
+      const data = await res.json();
+      document.getElementById('trialDaysInput').value = data.trial_days;
+      document.getElementById('trialDaysStatus').textContent = `Currently: ${data.trial_days} day(s) free trial for every newly signed-up flat owner.`;
+    } catch (e) { /* silent */ }
+  }
+
+  async function saveTrialDays() {
+    const days = document.getElementById('trialDaysInput').value;
+    try {
+      const res = await fetch('/api/settings/trial-days', {
+        method: 'POST', headers: authHeaders(), body: JSON.stringify({ trial_days: days })
+      });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error || 'Could not save.'); return; }
+      loadTrialDays();
+    } catch (e) { alert('Could not reach server.'); }
+  }
 
   async function loadBuildingLayout() {
     try {
