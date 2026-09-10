@@ -597,15 +597,24 @@ app.post("/api/flat-config/:apartment/:floor/:flat", requireAuth, requireAdmin, 
 
 app.get("/api/flats", requireAuth, requireAdmin, ah(async (req, res) => {
   // Which admin's flats to show: a regular admin always sees only their own;
-  // a super admin sees everything by default, or a specific admin's flats via ?admin_phone=
+  // a super admin sees everything by default, a specific admin's flats via ?admin_phone=,
+  // or orphaned/unassigned flats (e.g. left behind after an admin was deleted) via ?admin_phone=__unassigned__
   const scopeToAdmin = req.user.role === "admin" ? req.user.phone : (req.query.admin_phone || null);
+  const showUnassigned = scopeToAdmin === "__unassigned__";
 
-  const [allFlatsData, owners, pendingInvites] = await Promise.all([
-    dbGetAllFlatsData(), dbGetAllFlatOwners(), dbGetUnusedFlatInvites(),
+  const [allFlatsData, owners, pendingInvites, allAdmins] = await Promise.all([
+    dbGetAllFlatsData(), dbGetAllFlatOwners(), dbGetUnusedFlatInvites(), dbGetAllAdmins(),
   ]);
+  const adminPhones = new Set(allAdmins.map((a) => a.phone));
 
-  const scopedOwners = scopeToAdmin ? owners.filter((u) => u.managed_by === scopeToAdmin) : owners;
-  const scopedInvites = scopeToAdmin ? pendingInvites.filter((i) => i.created_by === scopeToAdmin) : pendingInvites;
+  let scopedOwners, scopedInvites;
+  if (showUnassigned) {
+    scopedOwners = owners.filter((u) => !u.managed_by || !adminPhones.has(u.managed_by));
+    scopedInvites = pendingInvites.filter((i) => !i.created_by || !adminPhones.has(i.created_by));
+  } else {
+    scopedOwners = scopeToAdmin ? owners.filter((u) => u.managed_by === scopeToAdmin) : owners;
+    scopedInvites = scopeToAdmin ? pendingInvites.filter((i) => i.created_by === scopeToAdmin) : pendingInvites;
+  }
   const ownerKeys = new Set(owners.map((u) => keyFor(u.apartment, u.floor, u.flat)));
 
   const keysSet = new Set([
