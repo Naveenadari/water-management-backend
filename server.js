@@ -508,6 +508,11 @@ app.post("/api/profile/photo", requireAuth, ah(async (req, res) => {
   res.json({ success: true });
 }));
 
+app.delete("/api/profile/photo", requireAuth, ah(async (req, res) => {
+  await supabase.from("users").update({ profile_pic: null }).eq("phone", req.user.phone);
+  res.json({ success: true });
+}));
+
 // ---------------- HEALTH CHECK ----------------
 app.get("/api/health", (req, res) => { res.json({ status: "ok", time: new Date().toISOString() }); });
 
@@ -773,7 +778,18 @@ app.get("/api/usage/:apartment/:floor/:flat", requireAuth, ah(async (req, res) =
 // ---------------- PAYMENT (RAZORPAY) ----------------
 
 app.get("/api/config", requireAuth, ah(async (req, res) => {
-  res.json({ subscription_amount_paise: SUBSCRIPTION_AMOUNT_PAISE, trial_days: await getTrialDays() });
+  res.json({
+    subscription_amount_paise: SUBSCRIPTION_AMOUNT_PAISE,
+    trial_days: await getTrialDays(),
+    support_contact: (await supabase.from("app_settings").select("value").eq("key", "support_contact").maybeSingle()).data?.value || "",
+  });
+}));
+
+app.post("/api/settings/support-contact", requireAuth, requireSuperAdmin, ah(async (req, res) => {
+  const { support_contact } = req.body;
+  if (!support_contact || !support_contact.trim()) return res.status(400).json({ error: "Enter a valid contact number" });
+  await dbSetSetting("support_contact", support_contact.trim());
+  res.json({ success: true, support_contact: support_contact.trim() });
 }));
 
 app.post("/api/settings/trial-days", requireAuth, requireSuperAdmin, ah(async (req, res) => {
