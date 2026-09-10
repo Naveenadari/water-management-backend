@@ -149,16 +149,26 @@ async function dbGetSubscriptionPaidUntil(key) {
 }
 async function dbSetSubscription(key, paidUntilISO) { await supabase.from("subscriptions").upsert({ key, paid_until: paidUntilISO }); }
 
+async function dbGetSetting(key, fallback) {
+  const { data } = await supabase.from("app_settings").select("value").eq("key", key).maybeSingle();
+  if (!data) return fallback;
+  const n = parseFloat(data.value);
+  return isNaN(n) ? fallback : n;
+}
+async function dbSetSetting(key, value) { await supabase.from("app_settings").upsert({ key, value: String(value) }); }
+async function getTrialDays() { return await dbGetSetting("trial_days", TRIAL_DAYS); }
+
 const CYCLE_MS = CYCLE_DAYS * MS_PER_DAY;
 
 // The "reference" is the anchor point for this flat's billing cycle:
-// - First ever cycle anchor is 7 days after signup (end of free trial)
+// - First ever cycle anchor is N days after signup (end of free trial, N configurable by super admin)
 // - After any payment, the anchor moves forward by exactly the cycles paid for —
 //   never reset to "now", so late payments don't lose or gain days.
 async function getBillingReference(key) {
   const [apartment, floor, flat] = key.split("/");
   const owner = await dbGetFlatOwnerByKey(apartment, floor, flat);
-  const trialEnd = owner ? new Date(new Date(owner.created_at).getTime() + TRIAL_DAYS * MS_PER_DAY) : new Date();
+  const trialDays = await getTrialDays();
+  const trialEnd = owner ? new Date(new Date(owner.created_at).getTime() + trialDays * MS_PER_DAY) : new Date();
 
   const paidUntilISO = await dbGetSubscriptionPaidUntil(key);
   const paidUntil = paidUntilISO ? new Date(paidUntilISO) : null;
@@ -685,6 +695,10 @@ app.get("/api/flats/:apartment/:floor/:flat", requireAuth, ah(async (req, res) =
   const active = await isSubscriptionActive(key);
   const limit = await dbGetLimit(key);
   const hasValve = await dbGetHasValve(key);
+  const { reference, trialEnd } = await getBillingReference(key);
+  const now = new Date();
+  const isTrial = now < trialEnd;
+  const daysRemaining = Math.max(0, Math.ceil((reference.getTime() - now.getTime()) / MS_PER_DAY));
 
   res.json({
     subscription_active: active,
@@ -692,6 +706,11 @@ app.get("/api/flats/:apartment/:floor/:flat", requireAuth, ah(async (req, res) =
     latest: active ? await dbGetFlatData(key) : null,
     history: active ? await dbGetHistory(key) : [],
     limit,
+    subscription: {
+      is_trial: isTrial,
+      valid_until: reference.toISOString(),
+      days_remaining: daysRemaining,
+    },
   });
 }));
 
@@ -739,7 +758,16 @@ app.get("/api/usage/:apartment/:floor/:flat", requireAuth, ah(async (req, res) =
 
 // ---------------- PAYMENT (RAZORPAY) ----------------
 
-app.get("/api/config", requireAuth, (req, res) => { res.json({ subscription_amount_paise: SUBSCRIPTION_AMOUNT_PAISE }); });
+app.get("/api/config", requireAuth, ah(async (req, res) => {
+  res.json({ subscription_amount_paise: SUBSCRIPTION_AMOUNT_PAISE, trial_days: await getTrialDays() });
+}));
+
+app.post("/api/settings/trial-days", requireAuth, requireSuperAdmin, ah(async (req, res) => {
+  const days = parseInt(req.body.trial_days, 10);
+  if (!days || days < 0) return res.status(400).json({ error: "Enter a valid number of days" });
+  await dbSetSetting("trial_days", days);
+  res.json({ success: true, trial_days: days });
+}));
 
 app.get("/api/subscription/:apartment/:floor/:flat", requireAuth, ah(async (req, res) => {
   const { apartment, floor, flat } = req.params;
