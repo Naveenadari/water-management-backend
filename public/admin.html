@@ -198,7 +198,7 @@
   function applyRoleVisibility() {
     const superOnlyIds = ['superAdminCard', 'adminListCard', 'trialSettingsCard', 'supportContactCard'];
     superOnlyIds.forEach(id => {
-      document.getElementById(id).style.display = isSuperAdmin ? '' : 'none';
+      document.getElementById(id).classList.toggle('hidden', !isSuperAdmin);
     });
   }
   applyRoleVisibility();
