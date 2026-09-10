@@ -271,8 +271,9 @@
 
       body.innerHTML = admins.map(a => `
         <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #0f172a;">
-          <div style="cursor:pointer; flex:1;" onclick="filterByAdmin('${a.phone}','${a.name}')">
-            <b style="color:#fff;">${a.name}</b> <span style="color:#64748b; font-size:11px;">· ${a.apartment || 'no apartment set'} · ${a.phone}</span>
+          <div style="display:flex; align-items:center; gap:10px; cursor:pointer; flex:1;" onclick="filterByAdmin('${a.phone}','${a.name}')">
+            ${a.profile_pic ? `<img src="${a.profile_pic}" style="width:32px; height:32px; border-radius:50%; object-fit:cover;" />` : `<div style="width:32px; height:32px; border-radius:50%; background:rgba(255,255,255,0.08); display:flex; align-items:center; justify-content:center; font-size:15px;">👤</div>`}
+            <div><b style="color:#fff;">${a.name}</b> <span style="color:#64748b; font-size:11px;">· ${a.apartment || 'no apartment set'} · ${a.phone}</span></div>
           </div>
           <div style="display:flex; align-items:center; gap:10px;">
             <span style="color:#22d3ee; font-size:12px; cursor:pointer;" onclick="filterByAdmin('${a.phone}','${a.name}')">${a.total_flats} flat(s) →</span>
@@ -503,6 +504,13 @@
     renderNav();
   }
 
+  function avatarHtml(pic, size) {
+    size = size || 32;
+    return pic
+      ? `<img src="${pic}" style="width:${size}px; height:${size}px; border-radius:50%; object-fit:cover; flex-shrink:0;" />`
+      : `<div style="width:${size}px; height:${size}px; border-radius:50%; background:rgba(255,255,255,0.08); display:flex; align-items:center; justify-content:center; font-size:${Math.round(size*0.45)}px; flex-shrink:0;">👤</div>`;
+  }
+
   function renderFlatsView() {
     document.getElementById('navBreadcrumb').innerHTML = `<a style="color:#22d3ee; cursor:pointer;" onclick="renderFloorsView()">← Floors</a> / ${navFloor}`;
     const area = document.getElementById('navArea');
@@ -532,6 +540,7 @@
           <div class="card" style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
             <div style="display:flex; align-items:center; gap:10px; cursor:pointer; flex:1;" onclick="openFlat('${key}')">
               ${!paid && f.owner_name ? `<input type="checkbox" class="payCheckbox" data-key="${key}" onclick="event.stopPropagation()" onchange="updatePaySelected()" />` : ''}
+              ${f.owner_name ? avatarHtml(f.owner_pic) : ''}
               <div>
                 <div class="flatname">Flat ${f.flat}</div>
                 <div class="flatsub">${f.owner_name || 'Not signed up'}</div>
@@ -558,6 +567,7 @@
         <div class="card" style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
           <div style="display:flex; align-items:center; gap:10px; cursor:pointer; flex:1;" onclick="openFlat('${key}')">
             ${!paid && f.owner_name ? `<input type="checkbox" class="payCheckbox" data-key="${key}" onclick="event.stopPropagation()" onchange="updatePaySelected()" />` : ''}
+            ${f.owner_name ? avatarHtml(f.owner_pic) : ''}
             <div>
               <div class="flatname">Flat ${f.flat}</div>
               <div class="flatsub">${f.owner_name || 'Not signed up'}</div>
@@ -620,8 +630,13 @@
 
     document.getElementById('navArea').innerHTML = `
       <div class="card">
-        <div class="flatname" style="font-size:16px; margin-bottom:2px;">Flat ${f.flat}</div>
-        <div class="flatsub" style="margin-bottom:14px;">${f.apartment} · ${f.floor}</div>
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
+          ${f.owner_name ? avatarHtml(f.owner_pic, 52) : ''}
+          <div>
+            <div class="flatname" style="font-size:16px; margin-bottom:2px;">Flat ${f.flat}</div>
+            <div class="flatsub">${f.apartment} · ${f.floor}</div>
+          </div>
+        </div>
 
         <div class="stats" style="margin-bottom:14px;">
           <div class="card"><b>${f.owner_name || '—'}</b><small>Owner</small></div>
