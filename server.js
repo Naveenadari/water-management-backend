@@ -326,7 +326,7 @@ async function requireAuth(req, res, next) {
     if (!phone) return res.status(401).json({ error: "Not authenticated" });
     const user = await dbGetUser(phone);
     if (!user) return res.status(401).json({ error: "Not authenticated" });
-    req.user = { role: user.role, name: user.name, phone: user.phone, apartment: user.apartment, floor: user.floor, flat: user.flat };
+    req.user = { role: user.role, name: user.name, phone: user.phone, apartment: user.apartment, floor: user.floor, flat: user.flat, profile_pic: user.profile_pic || null };
     next();
   } catch (e) {
     console.error(e);
@@ -490,10 +490,23 @@ app.post("/api/auth/login", ah(async (req, res) => {
 
   const token = makeToken();
   await dbCreateSession(token, phone);
-  res.json({ success: true, token, user: { role: user.role, name: user.name, phone: user.phone, apartment: user.apartment, floor: user.floor, flat: user.flat } });
+  res.json({ success: true, token, user: { role: user.role, name: user.name, phone: user.phone, apartment: user.apartment, floor: user.floor, flat: user.flat, profile_pic: user.profile_pic || null } });
 }));
 
 app.get("/api/auth/me", requireAuth, (req, res) => { res.json({ user: req.user }); });
+
+// Any logged-in user (flat owner, admin, super admin) can set their own profile picture.
+// Expects a small base64 data URL (client should resize/compress before sending).
+app.post("/api/profile/photo", requireAuth, ah(async (req, res) => {
+  const { photo } = req.body;
+  if (!photo || typeof photo !== "string" || !photo.startsWith("data:image/")) {
+    return res.status(400).json({ error: "Please send a valid image." });
+  }
+  if (photo.length > 700000) return res.status(400).json({ error: "Image is too large. Please choose a smaller photo." });
+
+  await supabase.from("users").update({ profile_pic: photo }).eq("phone", req.user.phone);
+  res.json({ success: true });
+}));
 
 // ---------------- HEALTH CHECK ----------------
 app.get("/api/health", (req, res) => { res.json({ status: "ok", time: new Date().toISOString() }); });
@@ -609,6 +622,7 @@ app.get("/api/flats", requireAuth, requireAdmin, ah(async (req, res) => {
     return {
       apartment, floor, flat,
       owner_name: owner ? owner.name : null,
+      owner_pic: owner ? owner.profile_pic : null,
       managed_by: owner ? owner.managed_by : null,
       owner_phone: owner ? owner.phone : null,
       valve_status: flatData ? flatData.valve_status : null,
@@ -659,7 +673,7 @@ app.get("/api/admins", requireAuth, requireSuperAdmin, ah(async (req, res) => {
   const result = admins.map((a) => {
     const theirFlats = owners.filter((u) => u.managed_by === a.phone);
     return {
-      name: a.name, phone: a.phone, apartment: a.apartment, created_at: a.created_at,
+      name: a.name, phone: a.phone, apartment: a.apartment, profile_pic: a.profile_pic, created_at: a.created_at,
       total_flats: theirFlats.length,
     };
   });
