@@ -185,10 +185,6 @@
             <div class="name" id="nameLine">-- <span id="flatLine"></span></div>
           </div>
         </div>
-        <div style="display:flex; align-items:center; gap:14px;">
-          <div id="installIcon" style="font-size:20px; cursor:pointer; display:none;" onclick="installApp()" title="Install App">📲</div>
-          <div style="font-size:20px; cursor:pointer;" onclick="logout()">🚪</div>
-        </div>
       </div>
       <div class="datebar">
         <span id="dateNow">—</span>
@@ -273,6 +269,7 @@
         <div onclick="document.getElementById('profilePicInput').click()" style="position:absolute; bottom:0; right:0; width:28px; height:28px; border-radius:50%; background:#22d3ee; display:flex; align-items:center; justify-content:center; font-size:14px; cursor:pointer; border:2px solid #0f172a;">✏️</div>
         <input type="file" id="profilePicInput" accept="image/*" style="display:none;" onchange="uploadProfilePic(event)" />
       </div>
+      <div id="removePicLink" class="hidden" style="font-size:11px; color:#fca5a5; cursor:pointer; margin-bottom:8px;" onclick="removeProfilePic()">🗑️ Remove Photo</div>
       <div style="font-size:14px;font-weight:600;color:#fff;margin-bottom:4px;" id="profileName">—</div>
       <div style="font-size:12px;color:#94a3b8;" id="profileMeta">—</div>
     </div>
@@ -281,7 +278,18 @@
       <div id="paymentDetailsBody" style="font-size:13px; color:#cbd5e1;">Loading…</div>
       <button id="btnRecharge" style="display:none; width:100%; margin-top:12px; border-radius:12px; font-size:14px; font-weight:700; padding:12px; border:none; background:#22d3ee; color:#0f172a; cursor:pointer;" onclick="rechargeFromProfile()">Recharge Now</button>
     </div>
+
+    <div class="card" style="margin-bottom:14px;">
+      <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:10px;">❓ Help &amp; Support</div>
+      <div id="contactUsRow" style="display:flex; align-items:center; justify-content:space-between; padding:10px 0; cursor:pointer;" onclick="callSupport()">
+        <span style="color:#cbd5e1; font-size:13px;">📞 Contact Us</span>
+        <span id="supportNumberText" style="color:#22d3ee; font-size:13px;">—</span>
+      </div>
+    </div>
+
+    <button id="btnDownloadApp" style="display:none; width:100%; margin-bottom:12px; align-items:center; justify-content:center; gap:8px; border-radius:12px; font-size:14px; font-weight:700; padding:12px; border:1px solid #22d3ee; background:rgba(34,211,238,0.1); color:#22d3ee; cursor:pointer;" onclick="installApp()">📲 Download App</button>
     <button style="width:100%; border-radius:12px; font-size:14px; font-weight:700; padding:12px; border:1px solid #7f1d1d; background:rgba(127,29,29,0.2); color:#fca5a5; cursor:pointer;" onclick="logout()">Logout</button>
+    <div style="height:20px;"></div>
   </div>
 
   <div class="navwrap">
@@ -484,19 +492,50 @@
     document.getElementById('profileMeta').textContent = `${authUser.apartment} · ${authUser.floor} · Flat ${authUser.flat} · ${authUser.phone}`;
     renderProfilePic(authUser.profile_pic);
     loadPaymentDetails();
+    loadSupportContact();
+    document.getElementById('btnDownloadApp').style.display = deferredInstallPrompt ? 'flex' : 'none';
   }
 
   function renderProfilePic(picUrl) {
     const img = document.getElementById('profilePic');
     const placeholder = document.getElementById('profilePicPlaceholder');
+    const removeLink = document.getElementById('removePicLink');
     if (picUrl) {
       img.src = picUrl;
       img.classList.remove('hidden');
       placeholder.classList.add('hidden');
+      removeLink.classList.remove('hidden');
     } else {
       img.classList.add('hidden');
       placeholder.classList.remove('hidden');
+      removeLink.classList.add('hidden');
     }
+  }
+
+  async function removeProfilePic() {
+    if (!confirm('Remove your profile photo?')) return;
+    try {
+      const res = await fetch('/api/profile/photo', { method: 'DELETE', headers: authHeaders() });
+      if (!res.ok) { alert('Could not remove photo.'); return; }
+      authUser.profile_pic = null;
+      localStorage.setItem('wm_user', JSON.stringify(authUser));
+      renderProfilePic(null);
+    } catch (e) { alert('Could not reach server.'); }
+  }
+
+  let supportContactNumber = '';
+  async function loadSupportContact() {
+    try {
+      const res = await fetch('/api/config', { headers: authHeaders() });
+      const data = await res.json();
+      supportContactNumber = data.support_contact || '';
+      document.getElementById('supportNumberText').textContent = supportContactNumber || 'Not available';
+    } catch (e) { /* silent */ }
+  }
+
+  function callSupport() {
+    if (!supportContactNumber) { alert('Support contact number is not set up yet. Please ask your admin.'); return; }
+    window.location.href = 'tel:' + supportContactNumber;
   }
 
   function uploadProfilePic(event) {
@@ -746,14 +785,15 @@
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     deferredInstallPrompt = e;
-    const icon = document.getElementById('installIcon');
-    if (icon) icon.style.display = 'block';
+    const btn = document.getElementById('btnDownloadApp');
+    if (btn) btn.style.display = 'flex';
   });
   function installApp() {
-    if (!deferredInstallPrompt) return;
+    if (!deferredInstallPrompt) { alert('Your browser already has this app installed, or installation isn\'t available right now.'); return; }
     deferredInstallPrompt.prompt();
     deferredInstallPrompt = null;
-    document.getElementById('installIcon').style.display = 'none';
+    const btn = document.getElementById('btnDownloadApp');
+    if (btn) btn.style.display = 'none';
   }
 
   // ---------------- REGISTER SERVICE WORKER (PWA) ----------------
