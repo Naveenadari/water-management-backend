@@ -103,6 +103,18 @@
     <div id="trialDaysStatus" style="font-size:11px; color:#64748b; margin-top:8px;"></div>
   </div>
 
+  <div id="supportContactCard" class="card hidden" style="margin-top:8px; border-color:rgba(251,191,36,0.4);">
+    <div style="font-size:13px; font-weight:600; color:#fcd34d; margin-bottom:10px;">☎️ Support Contact Number</div>
+    <div style="display:flex; gap:8px; align-items:flex-end;">
+      <div>
+        <label style="font-size:11px;color:#94a3b8;">Phone number shown to flat owners under Help & Support</label><br/>
+        <input class="limitInput" id="supportContactInput" placeholder="e.g. 9876543210" style="width:160px;" />
+      </div>
+      <button class="act limit" onclick="saveSupportContact()">Save</button>
+    </div>
+    <div id="supportContactStatus" style="font-size:11px; color:#64748b; margin-top:8px;"></div>
+  </div>
+
   <div id="adminListCard" class="card hidden" style="margin-top:8px; border-color:rgba(251,191,36,0.4);">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
       <div style="font-size:13px; font-weight:600; color:#fcd34d;">📋 Apartment Admins</div>
@@ -203,6 +215,7 @@
     document.getElementById('superAdminCard').classList.remove('hidden');
     document.getElementById('adminListCard').classList.remove('hidden');
     document.getElementById('trialSettingsCard').classList.remove('hidden');
+    document.getElementById('supportContactCard').classList.remove('hidden');
     loadAdminList();
     loadTrialDays();
   } else {
@@ -216,7 +229,22 @@
       const data = await res.json();
       document.getElementById('trialDaysInput').value = data.trial_days;
       document.getElementById('trialDaysStatus').textContent = `Currently: ${data.trial_days} day(s) free trial for every newly signed-up flat owner.`;
+      document.getElementById('supportContactInput').value = data.support_contact || '';
+      document.getElementById('supportContactStatus').textContent = data.support_contact
+        ? `Currently: ${data.support_contact}` : 'Not set yet — flat owners will not see a contact number.';
     } catch (e) { /* silent */ }
+  }
+
+  async function saveSupportContact() {
+    const support_contact = document.getElementById('supportContactInput').value;
+    try {
+      const res = await fetch('/api/settings/support-contact', {
+        method: 'POST', headers: authHeaders(), body: JSON.stringify({ support_contact })
+      });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error || 'Could not save.'); return; }
+      loadTrialDays();
+    } catch (e) { alert('Could not reach server.'); }
   }
 
   async function saveTrialDays() {
