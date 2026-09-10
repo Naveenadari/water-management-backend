@@ -250,9 +250,20 @@
       const admins = await res.json();
       adminListCache = admins;
       const body = document.getElementById('adminListBody');
-      if (admins.length === 0) { body.textContent = 'No apartment admins invited yet.'; return; }
 
-      body.innerHTML = admins.map(a => `
+      const unassignedRow = `
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #0f172a; cursor:pointer;" onclick="filterByAdmin('__unassigned__','Unassigned Flats')">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <div style="width:32px; height:32px; border-radius:50%; background:rgba(251,191,36,0.15); display:flex; align-items:center; justify-content:center; font-size:15px;">🔍</div>
+            <div><b style="color:#fcd34d;">Unassigned Flats</b> <span style="color:#64748b; font-size:11px;">· e.g. left behind after deleting an admin</span></div>
+          </div>
+          <span style="color:#22d3ee; font-size:12px;">View →</span>
+        </div>
+      `;
+
+      if (admins.length === 0) { body.innerHTML = unassignedRow + '<div style="color:#64748b; font-size:12px; padding-top:8px;">No apartment admins invited yet.</div>'; return; }
+
+      body.innerHTML = unassignedRow + admins.map(a => `
         <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #0f172a;">
           <div style="display:flex; align-items:center; gap:10px; cursor:pointer; flex:1;" onclick="filterByAdmin('${a.phone}','${a.name}')">
             ${a.profile_pic ? `<img src="${a.profile_pic}" style="width:32px; height:32px; border-radius:50%; object-fit:cover;" />` : `<div style="width:32px; height:32px; border-radius:50%; background:rgba(255,255,255,0.08); display:flex; align-items:center; justify-content:center; font-size:15px;">👤</div>`}
