@@ -505,7 +505,7 @@ app.get("/api/auth/me", requireAuth, (req, res) => { res.json({ user: req.user }
 // ---------------- OTP (via MSG91) — login OTP + forgot-password OTP ----------------
 const MSG91_AUTH_KEY = process.env.MSG91_AUTH_KEY;
 const MSG91_TEMPLATE_ID = process.env.MSG91_TEMPLATE_ID; // set once the DLT-approved OTP template is ready
-const OTP_EXPIRY_MINUTES = 5;
+const OTP_EXPIRY_SECONDS = 60;
 
 async function sendOtpSms(phone, otp) {
   // Until MSG91_TEMPLATE_ID is configured (DLT approval pending), OTPs are just logged
@@ -516,7 +516,7 @@ async function sendOtpSms(phone, otp) {
   }
   try {
     const mobile = phone.length === 10 ? "91" + phone : phone;
-    const url = `https://control.msg91.com/api/v5/otp?template_id=${MSG91_TEMPLATE_ID}&mobile=${mobile}&authkey=${MSG91_AUTH_KEY}&otp=${otp}&otp_expiry=${OTP_EXPIRY_MINUTES}`;
+    const url = `https://control.msg91.com/api/v5/otp?template_id=${MSG91_TEMPLATE_ID}&mobile=${mobile}&authkey=${MSG91_AUTH_KEY}&otp=${otp}&otp_expiry=1`;
     const resp = await fetch(url, { method: "POST" });
     const data = await resp.json();
     console.log("MSG91 response:", data);
@@ -538,7 +538,7 @@ app.post("/api/auth/send-otp", ah(async (req, res) => {
   if (!user) return res.status(404).json({ error: "No account found with this phone number" });
 
   const otp = generateOtp();
-  const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000).toISOString();
+  const expiresAt = new Date(Date.now() + OTP_EXPIRY_SECONDS * 1000).toISOString();
   await supabase.from("otps").insert({ phone, otp, purpose, expires_at: expiresAt });
 
   const result = await sendOtpSms(phone, otp);
