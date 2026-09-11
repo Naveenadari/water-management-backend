@@ -588,12 +588,38 @@
           </div>
         </div>
 
+        <div style="margin-bottom:14px;">
+          <div style="font-size:12px; color:#94a3b8; margin-bottom:6px;">🔧 Sensor Calibration (pulses per liter)</div>
+          <div class="btns">
+            <input class="limitInput" type="number" placeholder="e.g. 160" id="calib-${f.apartment}-${f.floor}-${f.flat}" value="${f.pulses_per_liter || 160}" />
+            <button class="act limit" onclick="saveCalibration('${f.apartment}','${f.floor}','${f.flat}')">Save</button>
+          </div>
+          <div style="font-size:11px; color:#64748b; margin-top:6px;">Higher number = sensor is treated as less sensitive (fewer liters counted per pulse). Adjust here anytime — no firmware reflash needed.</div>
+        </div>
+
         <div class="btns">
           <button class="act limit" onclick="resetPassword('${f.apartment}','${f.floor}','${f.flat}')">Reset Password</button>
           <button class="act delete" onclick="deleteAccount('${f.apartment}','${f.floor}','${f.flat}')">Delete</button>
         </div>
       </div>
     `;
+  }
+
+  async function saveCalibration(apartment, floor, flat) {
+    const input = document.getElementById(`calib-${apartment}-${floor}-${flat}`);
+    const value = parseFloat(input.value);
+    if (!value || value <= 0) { alert('Enter a valid pulses-per-liter number.'); return; }
+    try {
+      const res = await fetch(`/api/flat-config/${apartment}/${floor}/${flat}`, {
+        method: 'POST', headers: authHeaders(), body: JSON.stringify({ pulses_per_liter: value })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert('Failed: ' + (data.error || res.status));
+        return;
+      }
+      loadFlats();
+    } catch (e) { alert('Could not reach server: ' + e.message); }
   }
 
   async function assignAdmin(apartment, floor, flat) {
