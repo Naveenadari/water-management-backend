@@ -502,6 +502,95 @@ app.post("/api/auth/login", ah(async (req, res) => {
 
 app.get("/api/auth/me", requireAuth, (req, res) => { res.json({ user: req.user }); });
 
+// ---------------- OTP (via MSG91) — login OTP + forgot-password OTP ----------------
+const MSG91_AUTH_KEY = process.env.MSG91_AUTH_KEY;
+const MSG91_TEMPLATE_ID = process.env.MSG91_TEMPLATE_ID; // set once the DLT-approved OTP template is ready
+const OTP_EXPIRY_MINUTES = 5;
+
+async function sendOtpSms(phone, otp) {
+  // Until MSG91_TEMPLATE_ID is configured (DLT approval pending), OTPs are just logged
+  // server-side so testing can continue without real SMS delivery.
+  if (!MSG91_AUTH_KEY || !MSG91_TEMPLATE_ID) {
+    console.log(`[OTP - SMS NOT SENT, no template configured yet] ${phone} -> ${otp}`);
+    return { sent: false, reason: "SMS template not configured yet" };
+  }
+  try {
+    const mobile = phone.length === 10 ? "91" + phone : phone;
+    const url = `https://control.msg91.com/api/v5/otp?template_id=${MSG91_TEMPLATE_ID}&mobile=${mobile}&authkey=${MSG91_AUTH_KEY}&otp=${otp}&otp_expiry=${OTP_EXPIRY_MINUTES}`;
+    const resp = await fetch(url, { method: "POST" });
+    const data = await resp.json();
+    console.log("MSG91 response:", data);
+    return { sent: data.type === "success", raw: data };
+  } catch (e) {
+    console.error("MSG91 send failed:", e);
+    return { sent: false, reason: "MSG91 request failed" };
+  }
+}
+
+function generateOtp() { return String(Math.floor(100000 + Math.random() * 900000)); }
+
+// purpose: 'login' or 'reset'
+app.post("/api/auth/send-otp", ah(async (req, res) => {
+  const { phone, purpose } = req.body;
+  if (!phone || !["login", "reset"].includes(purpose)) return res.status(400).json({ error: "Invalid request" });
+
+  const user = await dbGetUser(phone);
+  if (!user) return res.status(404).json({ error: "No account found with this phone number" });
+
+  const otp = generateOtp();
+  const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000).toISOString();
+  await supabase.from("otps").insert({ phone, otp, purpose, expires_at: expiresAt });
+
+  const result = await sendOtpSms(phone, otp);
+  res.json({ success: true, sms_sent: result.sent, message: result.sent ? "OTP sent to your phone." : "OTP generated (SMS delivery not yet configured — check server logs)." });
+}));
+
+app.post("/api/auth/verify-otp", ah(async (req, res) => {
+  const { phone, otp, purpose } = req.body;
+  if (!phone || !otp || !["login", "reset"].includes(purpose)) return res.status(400).json({ error: "Invalid request" });
+
+  const { data: row } = await supabase.from("otps").select("*")
+    .eq("phone", phone).eq("otp", otp).eq("purpose", purpose).eq("used", false)
+    .gte("expires_at", new Date().toISOString())
+    .order("created_at", { ascending: false }).limit(1).maybeSingle();
+
+  if (!row) return res.status(400).json({ error: "Invalid or expired OTP" });
+  await supabase.from("otps").update({ used: true }).eq("id", row.id);
+
+  if (purpose === "login") {
+    const user = await dbGetUser(phone);
+    if (!user) return res.status(404).json({ error: "Account not found" });
+    const token = makeToken();
+    await dbCreateSession(token, phone);
+    return res.json({ success: true, token, user: { role: user.role, name: user.name, phone: user.phone, apartment: user.apartment, floor: user.floor, flat: user.flat, profile_pic: user.profile_pic || null } });
+  }
+
+  // purpose === 'reset': issue a short-lived token to allow setting a new password next
+  const resetToken = crypto.randomBytes(24).toString("hex");
+  const tokenExpiry = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  await supabase.from("password_reset_tokens").insert({ token: resetToken, phone, expires_at: tokenExpiry });
+  res.json({ success: true, reset_token: resetToken });
+}));
+
+app.post("/api/auth/reset-password", ah(async (req, res) => {
+  const { phone, reset_token, new_password } = req.body;
+  if (!phone || !reset_token || !new_password) return res.status(400).json({ error: "Missing required fields" });
+  if (new_password.length < 6) return res.status(400).json({ error: "Password must be at least 6 characters" });
+
+  const { data: row } = await supabase.from("password_reset_tokens").select("*")
+    .eq("token", reset_token).eq("phone", phone).gte("expires_at", new Date().toISOString()).maybeSingle();
+  if (!row) return res.status(400).json({ error: "Reset link expired. Please request a new OTP." });
+
+  const user = await dbGetUser(phone);
+  if (!user) return res.status(404).json({ error: "Account not found" });
+
+  const passwordHash = hashPassword(new_password, user.salt);
+  await supabase.from("users").update({ password_hash: passwordHash }).eq("phone", phone);
+  await supabase.from("password_reset_tokens").delete().eq("token", reset_token);
+
+  res.json({ success: true });
+}));
+
 // Any logged-in user (flat owner, admin, super admin) can set their own profile picture.
 // Expects a small base64 data URL (client should resize/compress before sending).
 app.post("/api/profile/photo", requireAuth, ah(async (req, res) => {
