@@ -166,7 +166,13 @@
       <div class="field"><label>Phone Number</label><input id="loginPhone" placeholder="10-digit mobile number" /></div>
 
       <div id="passwordModeFields">
-        <div class="field"><label>Password</label><input id="loginPassword" type="password" placeholder="Your password" /></div>
+        <div class="field">
+          <label>Password</label>
+          <div style="position:relative;">
+            <input id="loginPassword" type="password" placeholder="Your password" style="width:100%; padding-right:40px;" />
+            <span onclick="togglePasswordVisibility('loginPassword', this)" style="position:absolute; right:12px; top:50%; transform:translateY(-50%); cursor:pointer; font-size:16px;">👁️</span>
+          </div>
+        </div>
         <div style="text-align:right; margin-bottom:14px;"><span style="color:#22d3ee; font-size:12px; cursor:pointer;" onclick="showForgotPassword()">Forgot Password?</span></div>
         <button class="btn-primary" onclick="doLogin()">Log In</button>
       </div>
@@ -174,9 +180,13 @@
       <div id="otpModeFields" class="hidden">
         <button class="btn-primary" id="btnSendLoginOtp" onclick="sendLoginOtp()" style="margin-bottom:12px;">Send OTP</button>
         <div id="otpEntryBlock" class="hidden">
-          <div class="field"><label>Enter OTP</label><input id="loginOtpInput" placeholder="6-digit OTP" maxlength="6" /></div>
+          <div class="field">
+            <label>Enter OTP</label>
+            <input id="loginOtpInput" placeholder="6-digit OTP" maxlength="6" />
+          </div>
+          <div id="loginOtpTimer" style="text-align:center; font-size:12px; color:#22d3ee; margin-top:-10px; margin-bottom:14px;"></div>
           <button class="btn-primary" onclick="verifyLoginOtp()">Verify & Log In</button>
-          <p style="text-align:center; font-size:11px; color:#64748b; margin-top:10px; cursor:pointer;" onclick="sendLoginOtp()">Resend OTP</p>
+          <p id="loginResendBtn" style="text-align:center; font-size:11px; color:#334155; margin-top:10px; cursor:not-allowed;" onclick="sendLoginOtp()">Resend OTP</p>
         </div>
       </div>
 
@@ -192,13 +202,30 @@
       <button class="btn-primary" id="btnSendResetOtp" onclick="sendResetOtp()" style="margin-bottom:12px;">Send OTP</button>
 
       <div id="resetOtpBlock" class="hidden">
-        <div class="field"><label>Enter OTP</label><input id="resetOtpInput" placeholder="6-digit OTP" maxlength="6" /></div>
+        <div class="field">
+          <label>Enter OTP</label>
+          <input id="resetOtpInput" placeholder="6-digit OTP" maxlength="6" />
+        </div>
+        <div id="resetOtpTimer" style="text-align:center; font-size:12px; color:#22d3ee; margin-top:-10px; margin-bottom:14px;"></div>
         <button class="btn-primary" onclick="verifyResetOtp()">Verify OTP</button>
-        <p style="text-align:center; font-size:11px; color:#64748b; margin-top:10px; cursor:pointer;" onclick="sendResetOtp()">Resend OTP</p>
+        <p id="resetResendBtn" style="text-align:center; font-size:11px; color:#334155; margin-top:10px; cursor:not-allowed;" onclick="sendResetOtp()">Resend OTP</p>
       </div>
 
       <div id="newPasswordBlock" class="hidden">
-        <div class="field"><label>New Password</label><input id="newPassword" type="password" placeholder="At least 6 characters" /></div>
+        <div class="field">
+          <label>New Password</label>
+          <div style="position:relative;">
+            <input id="newPassword" type="password" placeholder="At least 6 characters" style="width:100%; padding-right:40px;" />
+            <span onclick="togglePasswordVisibility('newPassword', this)" style="position:absolute; right:12px; top:50%; transform:translateY(-50%); cursor:pointer; font-size:16px;">👁️</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Confirm New Password</label>
+          <div style="position:relative;">
+            <input id="confirmNewPassword" type="password" placeholder="Re-enter password" style="width:100%; padding-right:40px;" />
+            <span onclick="togglePasswordVisibility('confirmNewPassword', this)" style="position:absolute; right:12px; top:50%; transform:translateY(-50%); cursor:pointer; font-size:16px;">👁️</span>
+          </div>
+        </div>
         <button class="btn-primary" onclick="submitNewPassword()">Set New Password</button>
       </div>
 
@@ -375,6 +402,39 @@
     document.getElementById('authMsg').className = 'errbox hidden';
   }
 
+  const OTP_VALIDITY_SECONDS = 60; // must match backend OTP_EXPIRY_SECONDS
+  let otpTimers = {};
+  let otpExpiredState = { loginOtpTimer: true, resetOtpTimer: true };
+
+  function startOtpCountdown(timerElId, resendElId) {
+    if (otpTimers[timerElId]) clearInterval(otpTimers[timerElId]);
+    let remaining = OTP_VALIDITY_SECONDS;
+    otpExpiredState[timerElId] = false;
+    const timerEl = document.getElementById(timerElId);
+    const resendEl = document.getElementById(resendElId);
+    resendEl.style.color = '#334155';
+    resendEl.style.cursor = 'not-allowed';
+
+    function tick() {
+      const m = Math.floor(remaining / 60);
+      const s = String(remaining % 60).padStart(2, '0');
+      if (remaining > 0) {
+        timerEl.textContent = `OTP valid for ${m}:${s}`;
+        remaining--;
+      } else {
+        clearInterval(otpTimers[timerElId]);
+        otpExpiredState[timerElId] = true;
+        timerEl.textContent = 'OTP expired — please resend.';
+        timerEl.style.color = '#fca5a5';
+        resendEl.style.color = '#22d3ee';
+        resendEl.style.cursor = 'pointer';
+      }
+    }
+    timerEl.style.color = '#22d3ee';
+    tick();
+    otpTimers[timerElId] = setInterval(tick, 1000);
+  }
+
   function switchLoginMode(mode) {
     hideAuthMsg();
     const pwBtn = document.getElementById('tabPassword');
@@ -396,6 +456,9 @@
   async function sendLoginOtp() {
     const phone = document.getElementById('loginPhone').value.trim();
     if (!phone) { showAuthMsg('Please enter your phone number.'); return; }
+    if (!document.getElementById('otpEntryBlock').classList.contains('hidden') && !otpExpiredState.loginOtpTimer) {
+      showAuthMsg('Please wait for the current OTP to expire before requesting a new one.'); return;
+    }
     hideAuthMsg();
     try {
       const res = await fetch('/api/auth/send-otp', {
@@ -405,6 +468,7 @@
       const data = await res.json();
       if (!res.ok) { showAuthMsg(data.error || 'Could not send OTP.'); return; }
       document.getElementById('otpEntryBlock').classList.remove('hidden');
+      startOtpCountdown('loginOtpTimer', 'loginResendBtn');
       showAuthMsg(data.message || 'OTP sent.', true);
     } catch (e) { showAuthMsg('Could not reach the server.'); }
   }
@@ -438,6 +502,9 @@
   async function sendResetOtp() {
     const phone = document.getElementById('forgotPhone').value.trim();
     if (!phone) { showAuthMsg('Please enter your phone number.'); return; }
+    if (!document.getElementById('resetOtpBlock').classList.contains('hidden') && !otpExpiredState.resetOtpTimer) {
+      showAuthMsg('Please wait for the current OTP to expire before requesting a new one.'); return;
+    }
     hideAuthMsg();
     try {
       const res = await fetch('/api/auth/send-otp', {
@@ -447,6 +514,7 @@
       const data = await res.json();
       if (!res.ok) { showAuthMsg(data.error || 'Could not send OTP.'); return; }
       document.getElementById('resetOtpBlock').classList.remove('hidden');
+      startOtpCountdown('resetOtpTimer', 'resetResendBtn');
       showAuthMsg(data.message || 'OTP sent.', true);
     } catch (e) { showAuthMsg('Could not reach the server.'); }
   }
@@ -469,10 +537,18 @@
     } catch (e) { showAuthMsg('Could not reach the server.'); }
   }
 
+  function togglePasswordVisibility(inputId, iconEl) {
+    const input = document.getElementById(inputId);
+    if (input.type === 'password') { input.type = 'text'; iconEl.textContent = '🙈'; }
+    else { input.type = 'password'; iconEl.textContent = '👁️'; }
+  }
+
   async function submitNewPassword() {
     const phone = document.getElementById('forgotPhone').value.trim();
     const new_password = document.getElementById('newPassword').value;
+    const confirm_password = document.getElementById('confirmNewPassword').value;
     if (!new_password || new_password.length < 6) { showAuthMsg('Password must be at least 6 characters.'); return; }
+    if (new_password !== confirm_password) { showAuthMsg('Passwords do not match.'); return; }
     try {
       const res = await fetch('/api/auth/reset-password', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
