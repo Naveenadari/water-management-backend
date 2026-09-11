@@ -302,6 +302,13 @@ async function dbGetHasValve(key) {
 }
 async function dbSetHasValve(key, hasValve) { await supabase.from("flat_config").upsert({ key, has_valve: hasValve }); }
 
+const DEFAULT_PULSES_PER_LITER = 160;
+async function dbGetCalibration(key) {
+  const { data } = await supabase.from("flat_config").select("pulses_per_liter").eq("key", key).maybeSingle();
+  return data && data.pulses_per_liter ? Number(data.pulses_per_liter) : DEFAULT_PULSES_PER_LITER;
+}
+async function dbSetCalibration(key, pulsesPerLiter) { await supabase.from("flat_config").upsert({ key, pulses_per_liter: pulsesPerLiter }); }
+
 async function dbSavePaymentOrder(orderId, key, periods, baseDueISO) {
   await supabase.from("payment_orders").insert({ order_id: orderId, key, periods, base_due: baseDueISO });
 }
@@ -521,7 +528,15 @@ app.get("/api/health", (req, res) => { res.json({ status: "ok", time: new Date()
 app.post("/api/device/data/:apartment/:floor/:flat", ah(async (req, res) => {
   const { apartment, floor, flat } = req.params;
   const key = keyFor(apartment, floor, flat);
-  const { flow_lpm, total_liters, valve_status } = req.body;
+  const { pulses, interval_seconds, valve_status } = req.body;
+
+  const pulsesPerLiter = await dbGetCalibration(key);
+  const intervalSec = interval_seconds || 30;
+  const litersSinceLast = (Number(pulses) || 0) / pulsesPerLiter;
+  const flow_lpm = litersSinceLast / (intervalSec / 60);
+
+  const existing = await dbGetFlatData(key);
+  const total_liters = (existing && existing.total_liters ? Number(existing.total_liters) : 0) + litersSinceLast;
 
   const record = { flow_lpm, total_liters, valve_status, received_at: new Date().toISOString() };
 
@@ -530,7 +545,7 @@ app.post("/api/device/data/:apartment/:floor/:flat", ah(async (req, res) => {
   await recordDailyUsage(key, total_liters);
   await checkLimitAlerts(key, flat);
 
-  console.log(`Data from ${key}:`, record);
+  console.log(`Data from ${key}: pulses=${pulses} (${pulsesPerLiter}/L) -> ${record.flow_lpm.toFixed(2)} L/min, total ${record.total_liters.toFixed(2)}L`);
   res.json({ success: true });
 }));
 
@@ -589,10 +604,17 @@ app.get("/api/device/command/:apartment/:floor/:flat", (req, res) => {
 // Admin toggles whether a flat has a valve fitted (flow-only flats hide valve controls)
 app.post("/api/flat-config/:apartment/:floor/:flat", requireAuth, requireAdmin, ah(async (req, res) => {
   const { apartment, floor, flat } = req.params;
-  const { has_valve } = req.body;
+  const { has_valve, pulses_per_liter } = req.body;
   const key = keyFor(apartment, floor, flat);
-  await dbSetHasValve(key, !!has_valve);
-  res.json({ success: true, key, has_valve: !!has_valve });
+
+  if (has_valve !== undefined) await dbSetHasValve(key, !!has_valve);
+  if (pulses_per_liter !== undefined) {
+    const n = parseFloat(pulses_per_liter);
+    if (!n || n <= 0) return res.status(400).json({ error: "Enter a valid pulses-per-liter number" });
+    await dbSetCalibration(key, n);
+  }
+
+  res.json({ success: true, key });
 }));
 
 app.get("/api/flats", requireAuth, requireAdmin, ah(async (req, res) => {
@@ -632,6 +654,7 @@ app.get("/api/flats", requireAuth, requireAdmin, ah(async (req, res) => {
     const limit = await dbGetLimit(key);
     const todayUsage = active ? await dbGetDailyUsage(key, todayStr()) : null;
     const hasValve = await dbGetHasValve(key);
+    const calibration = await dbGetCalibration(key);
 
     return {
       apartment, floor, flat,
@@ -641,6 +664,7 @@ app.get("/api/flats", requireAuth, requireAdmin, ah(async (req, res) => {
       owner_phone: owner ? owner.phone : null,
       valve_status: flatData ? flatData.valve_status : null,
       has_valve: hasValve,
+      pulses_per_liter: calibration,
       subscription_active: active,
       flow_lpm: active ? (flatData ? Number(flatData.flow_lpm) || 0 : 0) : null,
       total_liters: active ? (flatData ? Number(flatData.total_liters) || 0 : 0) : null,
