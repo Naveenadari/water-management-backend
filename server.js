@@ -30,7 +30,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 // ---------------- PAYMENT CONFIG ----------------
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || "";
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || "";
-const SUBSCRIPTION_AMOUNT_PAISE = parseInt(process.env.SUBSCRIPTION_AMOUNT_PAISE || "9900", 10);
+const DEFAULT_SUBSCRIPTION_AMOUNT_PAISE = parseInt(process.env.SUBSCRIPTION_AMOUNT_PAISE || "9900", 10);
 const CYCLE_DAYS = 30;
 const TRIAL_DAYS = 7;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -157,6 +157,7 @@ async function dbGetSetting(key, fallback) {
 }
 async function dbSetSetting(key, value) { await supabase.from("app_settings").upsert({ key, value: String(value) }); }
 async function getTrialDays() { return await dbGetSetting("trial_days", TRIAL_DAYS); }
+async function getSubscriptionAmount() { return Math.round(await dbGetSetting("subscription_amount_paise", DEFAULT_SUBSCRIPTION_AMOUNT_PAISE)); }
 
 const CYCLE_MS = CYCLE_DAYS * MS_PER_DAY;
 
@@ -198,7 +199,8 @@ async function computeAmountDue(key) {
     cycles = Math.ceil((now - reference) / CYCLE_MS); // overdue cycles, including the current one
   }
 
-  const amountDue = SUBSCRIPTION_AMOUNT_PAISE * cycles;
+  const perCycleAmount = await getSubscriptionAmount();
+  const amountDue = perCycleAmount * cycles;
   const newPaidUntil = new Date(reference.getTime() + cycles * CYCLE_MS);
   return { cycles, amountDue, newPaidUntil };
 }
@@ -901,7 +903,7 @@ app.get("/api/usage/:apartment/:floor/:flat", requireAuth, ah(async (req, res) =
 
 app.get("/api/config", requireAuth, ah(async (req, res) => {
   res.json({
-    subscription_amount_paise: SUBSCRIPTION_AMOUNT_PAISE,
+    subscription_amount_paise: await getSubscriptionAmount(),
     trial_days: await getTrialDays(),
     support_contact: (await supabase.from("app_settings").select("value").eq("key", "support_contact").maybeSingle()).data?.value || "",
   });
@@ -919,6 +921,14 @@ app.post("/api/settings/trial-days", requireAuth, requireSuperAdmin, ah(async (r
   if (!days || days < 0) return res.status(400).json({ error: "Enter a valid number of days" });
   await dbSetSetting("trial_days", days);
   res.json({ success: true, trial_days: days });
+}));
+
+app.post("/api/settings/subscription-amount", requireAuth, requireSuperAdmin, ah(async (req, res) => {
+  const rupees = parseFloat(req.body.subscription_amount_rupees);
+  if (!rupees || rupees <= 0) return res.status(400).json({ error: "Enter a valid amount in rupees" });
+  const paise = Math.round(rupees * 100);
+  await dbSetSetting("subscription_amount_paise", paise);
+  res.json({ success: true, subscription_amount_paise: paise });
 }));
 
 app.get("/api/subscription/:apartment/:floor/:flat", requireAuth, ah(async (req, res) => {
