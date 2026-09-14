@@ -105,6 +105,18 @@
     <div id="trialDaysStatus" style="font-size:11px; color:#64748b; margin-top:8px;"></div>
   </div>
 
+  <div id="subscriptionAmountCard" class="card hidden" style="margin-top:8px; border-color:rgba(251,191,36,0.4);">
+    <div style="font-size:13px; font-weight:600; color:#fcd34d; margin-bottom:10px;">💰 Subscription Price</div>
+    <div style="display:flex; gap:8px; align-items:flex-end;">
+      <div>
+        <label style="font-size:11px;color:#94a3b8;">Amount per 30-day cycle (₹)</label><br/>
+        <input class="limitInput" id="subscriptionAmountInput" type="number" step="0.01" placeholder="e.g. 99" style="width:110px;" />
+      </div>
+      <button class="act limit" onclick="saveSubscriptionAmount()">Save</button>
+    </div>
+    <div id="subscriptionAmountStatus" style="font-size:11px; color:#64748b; margin-top:8px;"></div>
+  </div>
+
   <div id="supportContactCard" class="card hidden" style="margin-top:8px; border-color:rgba(251,191,36,0.4);">
     <div style="font-size:13px; font-weight:600; color:#fcd34d; margin-bottom:10px;">☎️ Support Contact Number</div>
     <div style="display:flex; gap:8px; align-items:flex-end;">
@@ -197,7 +209,7 @@
   const isSuperAdmin = (user.role === 'super_admin');
 
   function applyRoleVisibility() {
-    const superOnlyIds = ['superAdminCard', 'adminListCard', 'trialSettingsCard', 'supportContactCard', 'statAdminsCard'];
+    const superOnlyIds = ['superAdminCard', 'adminListCard', 'trialSettingsCard', 'subscriptionAmountCard', 'supportContactCard', 'statAdminsCard'];
     superOnlyIds.forEach(id => {
       document.getElementById(id).classList.toggle('hidden', !isSuperAdmin);
     });
@@ -218,7 +230,22 @@
       document.getElementById('supportContactInput').value = data.support_contact || '';
       document.getElementById('supportContactStatus').textContent = data.support_contact
         ? `Currently: ${data.support_contact}` : 'Not set yet — flat owners will not see a contact number.';
+      const rupees = (data.subscription_amount_paise / 100).toFixed(2);
+      document.getElementById('subscriptionAmountInput').value = rupees;
+      document.getElementById('subscriptionAmountStatus').textContent = `Currently: ₹${rupees} per 30-day cycle.`;
     } catch (e) { /* silent */ }
+  }
+
+  async function saveSubscriptionAmount() {
+    const subscription_amount_rupees = document.getElementById('subscriptionAmountInput').value;
+    try {
+      const res = await fetch('/api/settings/subscription-amount', {
+        method: 'POST', headers: authHeaders(), body: JSON.stringify({ subscription_amount_rupees })
+      });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error || 'Could not save.'); return; }
+      loadTrialDays();
+    } catch (e) { alert('Could not reach server.'); }
   }
 
   async function saveSupportContact() {
