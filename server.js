@@ -13,7 +13,7 @@ const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(express.static("public"));
 
 const PORT = process.env.PORT || 3000;
@@ -1042,6 +1042,54 @@ app.post("/api/payment/verify", requireAuth, ah(async (req, res) => {
 
   console.log(`Subscription extended for ${order.key} by ${order.periods} cycle(s), now valid until ${newPaidUntil}`);
   res.json({ success: true, paid_until: newPaidUntil, cycles_paid: order.periods });
+}));
+
+const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
+
+// Server-to-server safety net: in case the browser closes/loses network right after payment
+// (before our client-side /api/payment/verify call completes), this webhook independently
+// confirms the payment and extends the subscription. It's idempotent — if the client-side
+// verify already handled this order, the pending order row is gone and this becomes a no-op.
+app.post("/api/razorpay/webhook", ah(async (req, res) => {
+  const signature = req.headers["x-razorpay-signature"];
+  if (!RAZORPAY_WEBHOOK_SECRET || !signature || !req.rawBody) return res.status(400).json({ error: "Webhook not configured" });
+
+  const expected = crypto.createHmac("sha256", RAZORPAY_WEBHOOK_SECRET).update(req.rawBody).digest("hex");
+  if (expected !== signature) return res.status(400).json({ error: "Invalid webhook signature" });
+
+  const event = req.body.event;
+  if (event !== "payment.captured" && event !== "order.paid") return res.json({ received: true, ignored: event });
+
+  const orderId = req.body.payload?.payment?.entity?.order_id || req.body.payload?.order?.entity?.id;
+  if (!orderId) return res.json({ received: true, note: "No order_id in payload" });
+
+  try {
+    const selfOrder = await dbGetPaymentOrder(orderId);
+    if (selfOrder) {
+      const newPaidUntil = new Date(new Date(selfOrder.base_due).getTime() + selfOrder.periods * CYCLE_MS).toISOString();
+      await dbSetSubscription(selfOrder.key, newPaidUntil);
+      await dbDeletePaymentOrder(orderId);
+      console.log(`[webhook] Subscription extended for ${selfOrder.key} by ${selfOrder.periods} cycle(s), now valid until ${newPaidUntil}`);
+      return res.json({ received: true, applied: true });
+    }
+
+    const adminEntries = await dbGetAdminOrder(orderId);
+    if (adminEntries) {
+      for (const entry of adminEntries) {
+        const newPaidUntil = new Date(new Date(entry.base_due).getTime() + entry.cycles * CYCLE_MS).toISOString();
+        await dbSetSubscription(entry.key, newPaidUntil);
+        console.log(`[webhook] Subscription extended (admin) for ${entry.key} by ${entry.cycles} cycle(s), now valid until ${newPaidUntil}`);
+      }
+      await dbDeleteAdminOrder(orderId);
+      return res.json({ received: true, applied: true });
+    }
+
+    // Order not found — most likely already applied by the client-side verify call. Nothing to do.
+    res.json({ received: true, applied: false, note: "Order already processed or not found" });
+  } catch (e) {
+    console.error("[webhook] Error applying payment:", e);
+    res.json({ received: true, applied: false, error: "Internal error, will not retry" });
+  }
 }));
 
 app.post("/api/limits/:apartment/:floor/:flat", requireAuth, requireAdmin, ah(async (req, res) => {
