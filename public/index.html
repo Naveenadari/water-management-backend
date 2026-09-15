@@ -472,8 +472,9 @@
   let fbRecaptchaVerifier = null;
 
   function getRecaptchaVerifier() {
-    if (fbRecaptchaVerifier) { try { fbRecaptchaVerifier.clear(); } catch (e) {} }
-    fbRecaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', { size: 'invisible' });
+    if (!fbRecaptchaVerifier) {
+      fbRecaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', { size: 'invisible' });
+    }
     return fbRecaptchaVerifier;
   }
 
