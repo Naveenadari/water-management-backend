@@ -144,6 +144,8 @@
   .roletoggle button.active { background: linear-gradient(90deg,#2dd4bf,#22d3ee); color:#0f172a; border:none; }
 </style>
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 </head>
 <body>
 
@@ -233,6 +235,7 @@
     </div>
 
     <div id="authMsg" class="errbox hidden"></div>
+    <div id="recaptcha-container"></div>
   </div>
 </div>
 
@@ -453,6 +456,31 @@
     }
   }
 
+  // ---------------- FIREBASE PHONE AUTH ----------------
+  const firebaseConfig = {
+    apiKey: "AIzaSyBEBjsx5PmeHOfQunS9XxvLLOuJRSV_i7Y",
+    authDomain: "water-management-app-2e4f7.firebaseapp.com",
+    projectId: "water-management-app-2e4f7",
+    storageBucket: "water-management-app-2e4f7.firebasestorage.app",
+    messagingSenderId: "91418593566",
+    appId: "1:91418593566:web:6bb2e537ad22da1421e10f",
+    measurementId: "G-PEFZKP04L9"
+  };
+  firebase.initializeApp(firebaseConfig);
+
+  let fbConfirmationResult = null;
+  let fbRecaptchaVerifier = null;
+
+  function getRecaptchaVerifier() {
+    if (fbRecaptchaVerifier) { try { fbRecaptchaVerifier.clear(); } catch (e) {} }
+    fbRecaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', { size: 'invisible' });
+    return fbRecaptchaVerifier;
+  }
+
+  function toE164(phone) {
+    return phone.startsWith('+') ? phone : '+91' + phone;
+  }
+
   async function sendLoginOtp() {
     const phone = document.getElementById('loginPhone').value.trim();
     if (!phone) { showAuthMsg('Please enter your phone number.'); return; }
@@ -461,31 +489,33 @@
     }
     hideAuthMsg();
     try {
-      const res = await fetch('/api/auth/send-otp', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, purpose: 'login' })
-      });
-      const data = await res.json();
-      if (!res.ok) { showAuthMsg(data.error || 'Could not send OTP.'); return; }
+      const verifier = getRecaptchaVerifier();
+      fbConfirmationResult = await firebase.auth().signInWithPhoneNumber(toE164(phone), verifier);
       document.getElementById('otpEntryBlock').classList.remove('hidden');
       startOtpCountdown('loginOtpTimer', 'loginResendBtn');
-      showAuthMsg(data.message || 'OTP sent.', true);
-    } catch (e) { showAuthMsg('Could not reach the server.'); }
+      showAuthMsg('OTP sent to your phone.', true);
+    } catch (e) {
+      showAuthMsg(e.message || 'Could not send OTP.');
+    }
   }
 
   async function verifyLoginOtp() {
-    const phone = document.getElementById('loginPhone').value.trim();
     const otp = document.getElementById('loginOtpInput').value.trim();
     if (!otp) { showAuthMsg('Please enter the OTP.'); return; }
+    if (!fbConfirmationResult) { showAuthMsg('Please request a new OTP first.'); return; }
     try {
-      const res = await fetch('/api/auth/verify-otp', {
+      const result = await fbConfirmationResult.confirm(otp);
+      const idToken = await result.user.getIdToken();
+      const res = await fetch('/api/auth/firebase-login', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, otp, purpose: 'login' })
+        body: JSON.stringify({ id_token: idToken, purpose: 'login' })
       });
       const data = await res.json();
-      if (!res.ok) { showAuthMsg(data.error || 'Invalid OTP.'); return; }
+      if (!res.ok) { showAuthMsg(data.error || 'Login failed.'); return; }
       loginSuccess(data.token, data.user);
-    } catch (e) { showAuthMsg('Could not reach the server.'); }
+    } catch (e) {
+      showAuthMsg(e.message || 'Invalid OTP.');
+    }
   }
 
   function showForgotPassword() {
@@ -507,26 +537,26 @@
     }
     hideAuthMsg();
     try {
-      const res = await fetch('/api/auth/send-otp', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, purpose: 'reset' })
-      });
-      const data = await res.json();
-      if (!res.ok) { showAuthMsg(data.error || 'Could not send OTP.'); return; }
+      const verifier = getRecaptchaVerifier();
+      fbConfirmationResult = await firebase.auth().signInWithPhoneNumber(toE164(phone), verifier);
       document.getElementById('resetOtpBlock').classList.remove('hidden');
       startOtpCountdown('resetOtpTimer', 'resetResendBtn');
-      showAuthMsg(data.message || 'OTP sent.', true);
-    } catch (e) { showAuthMsg('Could not reach the server.'); }
+      showAuthMsg('OTP sent to your phone.', true);
+    } catch (e) {
+      showAuthMsg(e.message || 'Could not send OTP.');
+    }
   }
 
   async function verifyResetOtp() {
-    const phone = document.getElementById('forgotPhone').value.trim();
     const otp = document.getElementById('resetOtpInput').value.trim();
     if (!otp) { showAuthMsg('Please enter the OTP.'); return; }
+    if (!fbConfirmationResult) { showAuthMsg('Please request a new OTP first.'); return; }
     try {
-      const res = await fetch('/api/auth/verify-otp', {
+      const result = await fbConfirmationResult.confirm(otp);
+      const idToken = await result.user.getIdToken();
+      const res = await fetch('/api/auth/firebase-login', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, otp, purpose: 'reset' })
+        body: JSON.stringify({ id_token: idToken, purpose: 'reset' })
       });
       const data = await res.json();
       if (!res.ok) { showAuthMsg(data.error || 'Invalid OTP.'); return; }
@@ -534,7 +564,9 @@
       document.getElementById('resetOtpBlock').classList.add('hidden');
       document.getElementById('newPasswordBlock').classList.remove('hidden');
       hideAuthMsg();
-    } catch (e) { showAuthMsg('Could not reach the server.'); }
+    } catch (e) {
+      showAuthMsg(e.message || 'Invalid OTP.');
+    }
   }
 
   function togglePasswordVisibility(inputId, iconEl) {
