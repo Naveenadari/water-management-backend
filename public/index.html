@@ -158,13 +158,8 @@
       <p class="sub2">Log in to monitor your water usage</p>
     </div>
 
-    <!-- LOGIN FORM (password or OTP) -->
+    <!-- LOGIN FORM -->
     <div id="loginForm">
-      <div style="display:flex; gap:8px; margin-bottom:16px;">
-        <button id="tabPassword" onclick="switchLoginMode('password')" style="flex:1; padding:10px; border-radius:10px; border:1px solid #22d3ee; background:rgba(34,211,238,0.15); color:#22d3ee; font-weight:700; font-size:13px; cursor:pointer;">Password</button>
-        <button id="tabOtp" onclick="switchLoginMode('otp')" style="flex:1; padding:10px; border-radius:10px; border:1px solid #334155; background:transparent; color:#94a3b8; font-weight:700; font-size:13px; cursor:pointer;">Login with OTP</button>
-      </div>
-
       <div class="field"><label>Phone Number</label><input id="loginPhone" placeholder="10-digit mobile number" /></div>
 
       <div id="passwordModeFields">
@@ -177,19 +172,6 @@
         </div>
         <div style="text-align:right; margin-bottom:14px;"><span style="color:#22d3ee; font-size:12px; cursor:pointer;" onclick="showForgotPassword()">Forgot Password?</span></div>
         <button class="btn-primary" onclick="doLogin()">Log In</button>
-      </div>
-
-      <div id="otpModeFields" class="hidden">
-        <button class="btn-primary" id="btnSendLoginOtp" onclick="sendLoginOtp()" style="margin-bottom:12px;">Send OTP</button>
-        <div id="otpEntryBlock" class="hidden">
-          <div class="field">
-            <label>Enter OTP</label>
-            <input id="loginOtpInput" placeholder="6-digit OTP" maxlength="6" />
-          </div>
-          <div id="loginOtpTimer" style="text-align:center; font-size:12px; color:#22d3ee; margin-top:-10px; margin-bottom:14px;"></div>
-          <button class="btn-primary" onclick="verifyLoginOtp()">Verify & Log In</button>
-          <p id="loginResendBtn" style="text-align:center; font-size:11px; color:#334155; margin-top:10px; cursor:not-allowed;" onclick="sendLoginOtp()">Resend OTP</p>
-        </div>
       </div>
 
       <p style="text-align:center; font-size:11px; color:#64748b; margin-top:14px;">
@@ -438,25 +420,7 @@
     otpTimers[timerElId] = setInterval(tick, 1000);
   }
 
-  function switchLoginMode(mode) {
-    hideAuthMsg();
-    const pwBtn = document.getElementById('tabPassword');
-    const otpBtn = document.getElementById('tabOtp');
-    if (mode === 'password') {
-      document.getElementById('passwordModeFields').classList.remove('hidden');
-      document.getElementById('otpModeFields').classList.add('hidden');
-      pwBtn.style.background = 'rgba(34,211,238,0.15)'; pwBtn.style.color = '#22d3ee'; pwBtn.style.borderColor = '#22d3ee';
-      otpBtn.style.background = 'transparent'; otpBtn.style.color = '#94a3b8'; otpBtn.style.borderColor = '#334155';
-    } else {
-      document.getElementById('passwordModeFields').classList.add('hidden');
-      document.getElementById('otpModeFields').classList.remove('hidden');
-      document.getElementById('otpEntryBlock').classList.add('hidden');
-      otpBtn.style.background = 'rgba(34,211,238,0.15)'; otpBtn.style.color = '#22d3ee'; otpBtn.style.borderColor = '#22d3ee';
-      pwBtn.style.background = 'transparent'; pwBtn.style.color = '#94a3b8'; pwBtn.style.borderColor = '#334155';
-    }
-  }
-
-  // ---------------- FIREBASE PHONE AUTH ----------------
+  // ---------------- FIREBASE PHONE AUTH (used for Forgot Password only) ----------------
   const firebaseConfig = {
     apiKey: "AIzaSyBEBjsx5PmeHOfQunS9XxvLLOuJRSV_i7Y",
     authDomain: "water-management-app-2e4f7.firebaseapp.com",
@@ -480,43 +444,6 @@
 
   function toE164(phone) {
     return phone.startsWith('+') ? phone : '+91' + phone;
-  }
-
-  async function sendLoginOtp() {
-    const phone = document.getElementById('loginPhone').value.trim();
-    if (!phone) { showAuthMsg('Please enter your phone number.'); return; }
-    if (!document.getElementById('otpEntryBlock').classList.contains('hidden') && !otpExpiredState.loginOtpTimer) {
-      showAuthMsg('Please wait for the current OTP to expire before requesting a new one.'); return;
-    }
-    hideAuthMsg();
-    try {
-      const verifier = getRecaptchaVerifier();
-      fbConfirmationResult = await firebase.auth().signInWithPhoneNumber(toE164(phone), verifier);
-      document.getElementById('otpEntryBlock').classList.remove('hidden');
-      startOtpCountdown('loginOtpTimer', 'loginResendBtn');
-      showAuthMsg('OTP sent to your phone.', true);
-    } catch (e) {
-      showAuthMsg(e.message || 'Could not send OTP.');
-    }
-  }
-
-  async function verifyLoginOtp() {
-    const otp = document.getElementById('loginOtpInput').value.trim();
-    if (!otp) { showAuthMsg('Please enter the OTP.'); return; }
-    if (!fbConfirmationResult) { showAuthMsg('Please request a new OTP first.'); return; }
-    try {
-      const result = await fbConfirmationResult.confirm(otp);
-      const idToken = await result.user.getIdToken();
-      const res = await fetch('/api/auth/firebase-login', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id_token: idToken, purpose: 'login' })
-      });
-      const data = await res.json();
-      if (!res.ok) { showAuthMsg(data.error || 'Login failed.'); return; }
-      loginSuccess(data.token, data.user);
-    } catch (e) {
-      showAuthMsg(e.message || 'Invalid OTP.');
-    }
   }
 
   function showForgotPassword() {
