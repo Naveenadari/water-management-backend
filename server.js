@@ -6,6 +6,7 @@
 const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
+const admin = require("firebase-admin");
 const http = require("http");
 const WebSocket = require("ws");
 const Razorpay = require("razorpay");
@@ -505,6 +506,58 @@ app.post("/api/auth/login", ah(async (req, res) => {
 app.get("/api/auth/me", requireAuth, (req, res) => { res.json({ user: req.user }); });
 
 // ---------------- OTP (via MSG91) — login OTP + forgot-password OTP ----------------
+// ---------------- FIREBASE ADMIN (phone auth verification) ----------------
+let firebaseAdminReady = false;
+try {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    firebaseAdminReady = true;
+    console.log("Firebase Admin initialized.");
+  } else {
+    console.log("FIREBASE_SERVICE_ACCOUNT_JSON not set — Firebase phone login disabled.");
+  }
+} catch (e) {
+  console.error("Firebase Admin init failed:", e.message);
+}
+
+// Verifies a Firebase phone-auth ID token (issued client-side after the user completes
+// the OTP flow directly with Google) and returns the verified phone number, stripped of
+// the "+91" country code to match how phone numbers are stored elsewhere in this app.
+async function verifyFirebaseIdToken(idToken) {
+  if (!firebaseAdminReady) throw new Error("Firebase phone login is not configured on the server yet.");
+  const decoded = await admin.auth().verifyIdToken(idToken);
+  if (!decoded.phone_number) throw new Error("This login method did not return a verified phone number.");
+  return decoded.phone_number.replace(/^\+91/, "");
+}
+
+app.post("/api/auth/firebase-login", ah(async (req, res) => {
+  const { id_token, purpose } = req.body;
+  if (!id_token || !["login", "reset"].includes(purpose)) return res.status(400).json({ error: "Invalid request" });
+
+  let phone;
+  try {
+    phone = await verifyFirebaseIdToken(id_token);
+  } catch (e) {
+    return res.status(401).json({ error: e.message || "Phone verification failed" });
+  }
+
+  const user = await dbGetUser(phone);
+  if (!user) return res.status(404).json({ error: "No account found with this phone number" });
+
+  if (purpose === "login") {
+    const token = makeToken();
+    await dbCreateSession(token, phone);
+    return res.json({ success: true, token, user: { role: user.role, name: user.name, phone: user.phone, apartment: user.apartment, floor: user.floor, flat: user.flat, profile_pic: user.profile_pic || null } });
+  }
+
+  // purpose === 'reset'
+  const resetToken = crypto.randomBytes(24).toString("hex");
+  const tokenExpiry = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  await supabase.from("password_reset_tokens").insert({ token: resetToken, phone, expires_at: tokenExpiry });
+  res.json({ success: true, reset_token: resetToken, phone });
+}));
+
 const MSG91_AUTH_KEY = process.env.MSG91_AUTH_KEY;
 const MSG91_TEMPLATE_ID = process.env.MSG91_TEMPLATE_ID; // set once the DLT-approved OTP template is ready
 const OTP_EXPIRY_SECONDS = 60;
