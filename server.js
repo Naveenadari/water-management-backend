@@ -964,7 +964,7 @@ app.post("/api/layout", requireAuth, requireAdmin, ah(async (req, res) => {
 }));
 
 // ---- Flat owner invite links for every flat in the layout ----
-async function buildLinks(apartment, create, createdBy) {
+async function buildLinks(apartment, create, createdBy, only) {
   const l = await dbGetLayout(apartment);
   const floors = (l && l.floors) || [];
   const [owners, invites] = await Promise.all([dbGetAllFlatOwners(), dbGetUnusedFlatInvites()]);
@@ -973,7 +973,7 @@ async function buildLinks(apartment, create, createdBy) {
     for (const flat of fl.flats) {
       const owner = owners.find((u) => boardKey(u.apartment) === boardKey(apartment) && u.floor === fl.floor && u.flat === flat);
       let invite = invites.find((i) => boardKey(i.apartment) === boardKey(apartment) && i.floor === fl.floor && i.flat === flat);
-      if (!owner && !invite && create) {
+      if (!owner && !invite && create && (!only || (only.floor === fl.floor && only.flat === flat))) {
         const token = crypto.randomBytes(12).toString("hex");
         await dbCreateFlatInvite(token, apartment, fl.floor, flat, createdBy);
         invite = { token };
@@ -996,7 +996,8 @@ app.post("/api/layout/links", requireAuth, requireAdmin, ah(async (req, res) => 
   const apartment = await canonicalApartment(apt);
   const createdBy = await adminPhoneForApartment(req, apartment);
   if (!createdBy) return res.status(400).json({ error: "No admin account found for this apartment." });
-  res.json(await buildLinks(apartment, true, createdBy));
+  const only = (req.body && req.body.floor && req.body.flat) ? { floor: String(req.body.floor), flat: String(req.body.flat) } : null;
+  res.json(await buildLinks(apartment, true, createdBy, only));
 }));
 
 // ---- Boards ----
