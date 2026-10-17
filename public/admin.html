@@ -1200,7 +1200,8 @@
       let slots = '';
       if (target) target.channels.forEach((c, i) => {
         const mine = as && as.board === target.board_no && as.slot === i;
-        if (!c || mine) slots += `<option value="${i}" ${navAssignSlot === i ? 'selected' : ''}>TB${i + 1}</option>`;
+        if (!c || mine) slots += `<option value="${i}" ${navAssignSlot === i ? 'selected' : ''}>TB${i + 1}${mine ? ' (current)' : ''}</option>`;
+        else slots += `<option value="" disabled>TB${i + 1} — used by ${esc(c.flat)} (${esc(floorLabel(c.floor))})</option>`;
       });
       return wrap(`📟
         <select style="${selStyle}" onchange="navAssignBoardChange(this.value)">${navBoards.map(b => `<option value="${b.board_no}" ${b.board_no === navAssignBoard ? 'selected' : ''}>Board ${b.board_no}</option>`).join('')}</select>
