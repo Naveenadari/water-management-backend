@@ -997,6 +997,12 @@ app.post("/api/layout/links", requireAuth, requireAdmin, ah(async (req, res) => 
   const createdBy = await adminPhoneForApartment(req, apartment);
   if (!createdBy) return res.status(400).json({ error: "No admin account found for this apartment." });
   const only = (req.body && req.body.floor && req.body.flat) ? { floor: String(req.body.floor), flat: String(req.body.flat) } : null;
+  // Regenerate: drop this flat's unused invite(s) so a fresh link is created (the old link stops working)
+  if (only && req.body.regenerate) {
+    const unused = await dbGetUnusedFlatInvites();
+    const tokens = unused.filter((i) => boardKey(i.apartment) === boardKey(apartment) && i.floor === only.floor && i.flat === only.flat).map((i) => i.token);
+    if (tokens.length) await supabase.from("flat_invites").delete().in("token", tokens);
+  }
   res.json(await buildLinks(apartment, true, createdBy, only));
 }));
 
