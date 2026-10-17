@@ -144,7 +144,19 @@
   </div>
 
 
-  <!-- ======== STEP 1: BUILDING SETUP ======== -->
+  <!-- ======== SUPER ADMIN: pick an apartment first ======== -->
+  <div id="aptPicker" class="card hidden" style="margin-top:8px; border-color:rgba(251,191,36,0.4);">
+    <button id="aptPickerToggle" class="act limit" style="width:100%; padding:10px 12px; font-size:13px; text-align:left;" onclick="toggleAptPicker()">▾ See all apartments</button>
+    <div id="aptPickerList" class="hidden" style="margin-top:8px;"></div>
+  </div>
+
+  <div id="setupWrap">
+  <div id="setupBack" class="hidden" style="margin-top:8px; display:flex; align-items:center; gap:10px;">
+    <button class="act limit" onclick="backToApartments()">← Back to apartments</button>
+    <b id="setupAptName" style="color:#fcd34d; font-size:13px;"></b>
+  </div>
+
+  <!-- ======== STEP 1: BUILDING SETUP ========
   <div id="layoutCard" class="card" style="margin-top:8px;">
     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:6px;">
       <div style="font-size:13px; font-weight:600; color:#fff;">🏢 Step 1 · Building Setup <span style="color:#64748b; font-weight:400;">(floors &amp; flats)</span></div>
@@ -209,6 +221,8 @@
     <div id="linksBody" style="font-size:12px; color:#94a3b8;">Save the building first.</div>
     <div id="linksMsg" style="font-size:11px; margin-top:8px;"></div>
   </div>
+
+  </div><!-- /setupWrap -->
 
   <div class="card" style="margin-top:8px;">
     <div style="font-size:13px; font-weight:600; color:#fff; margin-bottom:8px;">🔔 Recent Alerts</div>
@@ -510,21 +524,59 @@
   }
 
   // ----- apartment selector -----
+  let aptList = [];
+  let aptPickerOpen = false;
   async function initSetup() {
     try {
-      const apts = await api('GET', '/api/layout/apartments');
+      aptList = await api('GET', '/api/layout/apartments');
       const sel = document.getElementById('aptSelect');
-      sel.innerHTML = apts.map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join('');
-      if (apts.length === 0) {
-        document.getElementById('layoutBody').textContent = isSuperAdmin
-          ? 'No apartment admins yet. Create an admin first.'
-          : 'Your admin account has no apartment name. Ask the super admin to fix it.';
+      sel.innerHTML = aptList.map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join('');
+      if (isSuperAdmin) {
+        // Super admin: nothing is shown until an apartment is picked from "See all apartments"
+        document.getElementById('aptPicker').classList.remove('hidden');
+        document.getElementById('setupWrap').classList.add('hidden');
+        sel.parentElement.classList.add('hidden');
+        renderAptPicker();
+        return;
+      }
+      if (aptList.length === 0) {
+        document.getElementById('layoutBody').textContent = 'Your admin account has no apartment name. Ask the super admin to fix it.';
         document.getElementById('boardsBody').textContent = '';
         return;
       }
       setupApt = sel.value;
       await loadLayout();
     } catch (e) { layoutMsg(e.message, false); }
+  }
+  function renderAptPicker() {
+    const btn = document.getElementById('aptPickerToggle');
+    const list = document.getElementById('aptPickerList');
+    btn.textContent = `${aptPickerOpen ? '▴ Hide' : '▾ See all'} apartments (${aptList.length})`;
+    list.classList.toggle('hidden', !aptPickerOpen);
+    list.innerHTML = aptList.length === 0
+      ? '<div style="color:#64748b; font-size:12px;">No apartment admins yet.</div>'
+      : aptList.map((a, i) => `
+        <div class="card" style="margin-bottom:8px; cursor:pointer;" onclick="openApartment(${i})">
+          <div class="row"><div class="flatname" style="font-size:14px;">🏢 ${esc(a)}</div><div style="color:#22d3ee; font-size:18px;">→</div></div>
+        </div>`).join('');
+  }
+  function toggleAptPicker() { aptPickerOpen = !aptPickerOpen; renderAptPicker(); }
+  function openApartment(i) {
+    setupApt = aptList[i];
+    boardsDirty = false; openBoardSet = new Set(); linksTopOpen = false; linksOpenFloors = new Set();
+    document.getElementById('aptSelect').value = setupApt;
+    document.getElementById('setupAptName').textContent = setupApt;
+    document.getElementById('setupBack').classList.remove('hidden');
+    document.getElementById('aptPicker').classList.add('hidden');
+    document.getElementById('setupWrap').classList.remove('hidden');
+    loadLayout();
+  }
+  function backToApartments() {
+    setupApt = '';
+    aptPickerOpen = true;
+    document.getElementById('setupWrap').classList.add('hidden');
+    document.getElementById('aptPicker').classList.remove('hidden');
+    renderAptPicker();
   }
   function onAptChange() {
     setupApt = document.getElementById('aptSelect').value;
