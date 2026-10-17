@@ -170,25 +170,70 @@
     <div id="inviteError" class="errbox" style="display:none; margin-top:10px;"></div>
   </div>
 
-  <div id="boardsCard" class="card" style="margin-top:8px;">
+  <!-- ======== STEP 1: BUILDING SETUP ======== -->
+  <div id="layoutCard" class="card" style="margin-top:8px;">
     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:6px;">
-      <div style="font-size:13px; font-weight:600; color:#fff;">📟 ESP32 Boards &amp; Sensor Mapping</div>
+      <div style="font-size:13px; font-weight:600; color:#fff;">🏢 Step 1 · Building Setup <span style="color:#64748b; font-weight:400;">(floors &amp; flats)</span></div>
       <div style="display:flex; gap:6px; align-items:center;">
         <label style="font-size:11px;color:#94a3b8;">Apartment</label>
-        <select id="boardApartment" onchange="onBoardApartmentChange()" style="background:#0f172a; color:#fff; border:1px solid #334155; border-radius:6px; padding:5px 8px; font-size:12px;"></select>
+        <select id="aptSelect" onchange="onAptChange()" style="background:#0f172a; color:#fff; border:1px solid #334155; border-radius:6px; padding:5px 8px; font-size:12px;"></select>
       </div>
     </div>
     <div style="font-size:11px; color:#64748b; margin-bottom:10px; line-height:1.5;">
-      Each board has 8 sensor terminals (TB1–TB8). Pick which flat is wired to each terminal — the board picks this up automatically within ~30 seconds, no code upload needed.
-      A new board appears here by itself after you enter its <b>apartment name</b> and <b>board number</b> in its WiFi setup page.
+      Add every floor of the building (Cellar, Ground, 1, 2 …) and how many flats it has. Floors can have different numbers of flats.
+      Flat numbers are filled in automatically — you can edit any of them.
+    </div>
+    <div class="btns" style="margin-bottom:8px; align-items:center;">
+      <button class="act limit" onclick="addFloorRow('cellar')">+ Cellar</button>
+      <button class="act limit" onclick="addFloorRow('ground')">+ Ground</button>
+      <button class="act limit" onclick="addFloorRow('floor')">+ Floor</button>
+      <span style="font-size:11px; color:#64748b; margin-left:6px;">or quick fill:</span>
+      <input class="limitInput" id="qfFloors" type="number" min="1" placeholder="floors" style="width:60px;" />
+      <span style="color:#64748b;">×</span>
+      <input class="limitInput" id="qfFlats" type="number" min="1" placeholder="flats" style="width:60px;" />
+      <button class="act limit" onclick="quickFillFloors()">Fill</button>
+    </div>
+    <div id="layoutBody" style="font-size:12px; color:#94a3b8;">Loading…</div>
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px;">
+      <button class="act open" style="padding:8px 14px;" onclick="saveLayout()">💾 Save Building</button>
+      <span id="layoutSummary" style="font-size:12px; color:#94a3b8;"></span>
+    </div>
+    <div id="layoutMsg" style="font-size:11px; margin-top:8px;"></div>
+  </div>
+
+  <!-- ======== STEP 2: BOARDS ======== -->
+  <div id="boardsCard" class="card" style="margin-top:8px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:6px;">
+      <div style="font-size:13px; font-weight:600; color:#fff;">📟 Step 2 · ESP32 Boards &amp; Sensors</div>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <label style="font-size:11px;color:#94a3b8;">Total boards</label>
+        <input class="limitInput" id="totalBoardsInput" type="number" min="0" max="99" style="width:60px;" />
+        <button class="act limit" onclick="setTotalBoards()">Set</button>
+      </div>
+    </div>
+    <div style="font-size:11px; color:#64748b; margin-bottom:10px; line-height:1.5;">
+      Open a board and choose which flat is wired to each terminal (TB1–TB8). Only flats not yet used on another terminal are listed.
+      The board picks up changes by itself within ~30 seconds — no code upload.
     </div>
     <div class="btns" style="margin-bottom:10px;">
-      <button class="act limit" onclick="addBoard()">➕ Add Board</button>
       <button class="act limit" onclick="autoAssignBoards()">⚡ Auto-assign (8 flats per board)</button>
       <button class="act close" onclick="resetBoardsWifi()">📶 Reset WiFi of all boards</button>
     </div>
     <div id="boardsBody" style="font-size:12px; color:#94a3b8;">Loading…</div>
     <div id="boardsMsg" style="font-size:11px; margin-top:8px;"></div>
+  </div>
+
+  <!-- ======== STEP 3: FLAT OWNER LINKS ======== -->
+  <div id="linksCard" class="card" style="margin-top:8px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:6px;">
+      <div style="font-size:13px; font-weight:600; color:#fff;">🔗 Step 3 · Flat Owner Links</div>
+      <button class="act open" onclick="generateAllLinks()">Generate links for all flats</button>
+    </div>
+    <div style="font-size:11px; color:#64748b; margin-bottom:10px; line-height:1.5;">
+      Send each owner their link. They sign up with their phone number and see only their own flat's water data. Each link works once.
+    </div>
+    <div id="linksBody" style="font-size:12px; color:#94a3b8;">Save the building first.</div>
+    <div id="linksMsg" style="font-size:11px; margin-top:8px;"></div>
   </div>
 
   <div class="card" style="margin-top:8px;">
@@ -409,113 +454,280 @@
     return `<span class="badge open">${pct.toFixed(0)}%</span>`;
   }
 
-  // ---------------- ESP32 BOARDS CARD ----------------
+  // ---------------- BUILDING SETUP / BOARDS / OWNER LINKS ----------------
+  let setupApt = '';              // apartment currently being managed
+  let layoutRows = [];            // editable floors: { label, floor, flats:[...], auto:bool }
+  let layoutSaved = { floors: [], flats: 0, total_boards: 0 };
   let boardsCache = [];
-  let boardsDirty = false;      // true while the admin has unsaved dropdown changes — don't redraw over them
-  let boardsApartmentShown = null;
+  let boardsDirty = false;        // unsaved dropdown changes — don't redraw over them
+  let openBoardSet = new Set();   // which boards are expanded
+  let linksCache = [];
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
-  function boardsMsg(text, ok) {
-    const el = document.getElementById('boardsMsg');
+  function msgTo(id, text, ok) {
+    const el = document.getElementById(id);
+    if (!el) return;
     el.style.color = ok ? '#6ee7b7' : '#fca5a5';
     el.textContent = text || '';
   }
-  function currentBoardApartment() { return document.getElementById('boardApartment').value; }
+  const layoutMsg = (t, ok) => msgTo('layoutMsg', t, ok);
+  const boardsMsg = (t, ok) => msgTo('boardsMsg', t, ok);
+  const linksMsg = (t, ok) => msgTo('linksMsg', t, ok);
+  const aptQuery = () => 'apartment=' + encodeURIComponent(setupApt);
 
-  // Called after every flats refresh: keeps the apartment dropdown in step with the real invited flats
-  function syncBoardCard() {
-    const sel = document.getElementById('boardApartment');
-    const apts = [...new Set(flatsCache.map(f => f.apartment))].sort();
-    const prev = sel.value;
-    const same = apts.length === sel.options.length && apts.every((a, i) => sel.options[i].value === a);
-    if (!same) {
+  async function api(method, url, body) {
+    const res = await fetch(url, { method, headers: authHeaders(), body: body === undefined ? undefined : JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) { logout(); throw new Error('Session expired'); }
+    if (!res.ok) throw new Error(data.error || ('Failed (' + res.status + ')'));
+    return data;
+  }
+
+  // ----- floor naming helpers -----
+  function floorKeyFromLabel(label) {
+    const t = String(label || '').trim().toLowerCase();
+    if (!t) return '';
+    const num = (t.match(/\d+/) || [''])[0];
+    if (/^(cellar|basement)/.test(t)) return 'cellar' + (num ? parseInt(num, 10) : '');
+    if (/^(ground|gf\b|g\b)/.test(t)) return 'ground' + (num ? parseInt(num, 10) : '');
+    if (num) return 'floor' + parseInt(num, 10);
+    return t.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  }
+  function defaultLabel(key) {
+    const m = String(key).match(/^(cellar|ground|floor)(\d*)$/);
+    if (!m) return key;
+    const name = { cellar: 'Cellar', ground: 'Ground', floor: 'Floor' }[m[1]];
+    return m[2] ? `${name} ${m[2]}` : name;
+  }
+  function floorLabel(key) {
+    const f = (layoutSaved.floors || []).find(x => x.floor === key);
+    return f ? f.label : defaultLabel(key);
+  }
+  function genFlatNumber(key, i) {            // i starts at 1
+    let m = String(key).match(/^floor(\d+)$/);
+    if (m) return `${m[1]}${String(i).padStart(2, '0')}`;
+    m = String(key).match(/^ground(\d*)$/);
+    if (m) return m[1] ? `G${m[1]}-${i}` : `G${i}`;
+    m = String(key).match(/^cellar(\d*)$/);
+    if (m) return m[1] ? `C${m[1]}-${i}` : `C${i}`;
+    return `${String(key).toUpperCase().slice(0, 3)}${i}`;
+  }
+  function genFlats(key, count, existing) {
+    const out = (existing || []).slice(0, count);
+    for (let i = out.length + 1; i <= count; i++) {
+      let n = genFlatNumber(key, i), k = i;
+      while (out.includes(n)) { k++; n = genFlatNumber(key, k); }
+      out.push(n);
+    }
+    return out;
+  }
+
+  // ----- apartment selector -----
+  async function initSetup() {
+    try {
+      const apts = await api('GET', '/api/layout/apartments');
+      const sel = document.getElementById('aptSelect');
       sel.innerHTML = apts.map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join('');
-      if (apts.includes(prev)) sel.value = prev;
-    }
-    if (apts.length === 0) {
-      document.getElementById('boardsBody').textContent = 'Invite at least one flat owner first — then boards can be mapped to flats here.';
-      boardsApartmentShown = null;
-      return;
-    }
-    if (boardsApartmentShown !== sel.value) { loadBoards(); }
+      if (apts.length === 0) {
+        document.getElementById('layoutBody').textContent = isSuperAdmin
+          ? 'No apartment admins yet. Create an admin first.'
+          : 'Your admin account has no apartment name. Ask the super admin to fix it.';
+        document.getElementById('boardsBody').textContent = '';
+        return;
+      }
+      setupApt = sel.value;
+      await loadLayout();
+    } catch (e) { layoutMsg(e.message, false); }
+  }
+  function onAptChange() {
+    setupApt = document.getElementById('aptSelect').value;
+    boardsDirty = false; openBoardSet = new Set();
+    loadLayout();
   }
 
-  function onBoardApartmentChange() { boardsDirty = false; loadBoards(); }
-
-  function flatsOfApartment(apartment) {
-    return flatsCache.filter(f => f.apartment === apartment)
-      .sort((a, b) => (floorSortKey(a.floor) - floorSortKey(b.floor)) || (flatSortKey(a.flat) - flatSortKey(b.flat)));
+  // ----- Step 1: layout -----
+  async function loadLayout() {
+    if (!setupApt) return;
+    try {
+      const d = await api('GET', '/api/layout?' + aptQuery());
+      layoutSaved = d;
+      layoutRows = (d.floors || []).map(f => ({ label: f.label, floor: f.floor, flats: f.flats.slice(), auto: false }));
+      renderLayout();
+      document.getElementById('totalBoardsInput').value = d.total_boards || 0;
+      await loadBoards();
+      await loadLinks();
+    } catch (e) { layoutMsg(e.message, false); }
   }
 
-  function channelOptions(apartment, selectedValue) {
-    const flats = flatsOfApartment(apartment);
-    let html = '<option value="">— not connected —</option>';
-    let found = false;
-    html += flats.map(f => {
-      const v = `${f.floor}|${f.flat}`;
-      if (v === selectedValue) found = true;
-      return `<option value="${esc(v)}" ${v === selectedValue ? 'selected' : ''}>${esc(f.floor)} · Flat ${esc(f.flat)}${f.owner_name ? ' (' + esc(f.owner_name) + ')' : ''}</option>`;
-    }).join('');
-    if (selectedValue && !found) {
-      const [fl, ft] = selectedValue.split('|');
-      html += `<option value="${esc(selectedValue)}" selected>${esc(fl)} · Flat ${esc(ft)} (not in list)</option>`;
+  function renderLayout() {
+    const body = document.getElementById('layoutBody');
+    if (layoutRows.length === 0) {
+      body.innerHTML = 'No floors yet. Use <b>+ Cellar</b>, <b>+ Ground</b>, <b>+ Floor</b> or the quick fill above.';
+    } else {
+      body.innerHTML = layoutRows.map((r, i) => `
+        <div style="display:grid; grid-template-columns: 120px 70px 1fr 34px; gap:8px; align-items:center; margin-bottom:8px;">
+          <input class="limitInput" style="width:100%;" value="${esc(r.label)}" placeholder="Floor name" onchange="onRowLabel(${i}, this.value)" />
+          <input class="limitInput" style="width:100%;" type="number" min="0" max="99" value="${r.flats.length}" onchange="onRowCount(${i}, this.value)" title="Number of flats" />
+          <input class="limitInput" style="width:100%;" value="${esc(r.flats.join(', '))}" onchange="onRowFlats(${i}, this.value)" title="Flat numbers, comma separated" />
+          <button class="act close" style="padding:6px 0;" onclick="removeRow(${i})">✕</button>
+        </div>`).join('') +
+        `<div style="font-size:10px; color:#64748b;">Columns: floor name · number of flats · flat numbers (comma separated, editable)</div>`;
     }
-    return html;
+    updateLayoutSummary();
+  }
+  function updateLayoutSummary() {
+    const n = layoutRows.reduce((s, r) => s + r.flats.length, 0);
+    document.getElementById('layoutSummary').textContent = n
+      ? `${layoutRows.length} floor(s) · ${n} flat(s) → needs ${Math.ceil(n / 8)} board(s) (8 sensors each)`
+      : '';
+  }
+  function onRowLabel(i, v) {
+    const r = layoutRows[i];
+    r.label = v.trim();
+    const key = floorKeyFromLabel(r.label);
+    const count = r.flats.length;
+    r.floor = key;
+    if (r.auto || r.flats.length === 0) r.flats = genFlats(key, count, []);
+    renderLayout();
+  }
+  function onRowCount(i, v) {
+    const r = layoutRows[i];
+    const n = Math.max(0, Math.min(99, parseInt(v, 10) || 0));
+    r.flats = genFlats(r.floor || floorKeyFromLabel(r.label), n, r.flats);
+    r.auto = r.auto || false;
+    renderLayout();
+  }
+  function onRowFlats(i, v) {
+    layoutRows[i].flats = v.split(',').map(x => x.trim()).filter(Boolean);
+    layoutRows[i].auto = false;
+    renderLayout();
+  }
+  function removeRow(i) { layoutRows.splice(i, 1); renderLayout(); }
+  function addFloorRow(kind) {
+    let label;
+    if (kind === 'floor') {
+      const used = layoutRows.map(r => (String(r.floor).match(/^floor(\d+)$/) || [0, 0])[1] * 1);
+      label = 'Floor ' + ((used.length ? Math.max(...used) : 0) + 1);
+    } else {
+      const base = kind === 'cellar' ? 'Cellar' : 'Ground';
+      const taken = layoutRows.some(r => r.floor === kind);
+      label = taken ? `${base} ${layoutRows.filter(r => r.floor.startsWith(kind)).length + 1}` : base;
+    }
+    const key = floorKeyFromLabel(label);
+    layoutRows.push({ label, floor: key, flats: genFlats(key, 1, []), auto: true });
+    // keep a sensible order: cellar, ground, then floors by number
+    layoutRows.sort((a, b) => floorSortKey(a.floor) - floorSortKey(b.floor));
+    renderLayout();
+  }
+  function quickFillFloors() {
+    const nf = parseInt(document.getElementById('qfFloors').value, 10);
+    const nl = parseInt(document.getElementById('qfFlats').value, 10);
+    if (!nf || !nl || nf < 1 || nl < 1) { layoutMsg('Enter number of floors and flats per floor.', false); return; }
+    // replace numbered floors, keep any cellar/ground rows already added
+    layoutRows = layoutRows.filter(r => !/^floor\d+$/.test(r.floor));
+    for (let f = 1; f <= nf; f++) layoutRows.push({ label: 'Floor ' + f, floor: 'floor' + f, flats: genFlats('floor' + f, nl, []), auto: true });
+    layoutRows.sort((a, b) => floorSortKey(a.floor) - floorSortKey(b.floor));
+    layoutMsg('Filled. Change any floor\'s flat count or numbers, then press Save Building.', true);
+    renderLayout();
+  }
+  async function saveLayout() {
+    try {
+      for (const r of layoutRows) {
+        r.floor = floorKeyFromLabel(r.label);
+        if (!r.floor) throw new Error('Every floor needs a name.');
+      }
+      await api('POST', '/api/layout', { apartment: setupApt, floors: layoutRows.map(r => ({ floor: r.floor, label: r.label, flats: r.flats })) });
+      layoutMsg('Building saved.', true);
+      boardsDirty = false;
+      await loadLayout();
+      loadFlats();
+    } catch (e) { layoutMsg(e.message, false); }
   }
 
+  // ----- Step 2: boards -----
+  function layoutFlatList() {
+    const lc = String(setupApt).trim().toLowerCase();
+    const out = [];
+    (layoutSaved.floors || []).forEach(f => f.flats.forEach(flat => {
+      const own = flatsCache.find(x => String(x.apartment || '').trim().toLowerCase() === lc && x.floor === f.floor && x.flat === flat);
+      out.push({ value: `${f.floor}|${flat}`, label: `${f.label} · ${flat}${own && own.owner_name ? ' (' + own.owner_name + ')' : ''}` });
+    }));
+    return out;
+  }
   function boardStatusHtml(b) {
     const st = b.online
       ? '<span class="badge open">Online</span>'
-      : (b.last_seen ? `<span class="badge danger">Offline · ${timeAgo(b.last_seen)}</span>` : '<span class="badge closed">Never connected</span>');
-    const pend = b.wifi_reset_pending ? ' <span class="badge warn">WiFi reset pending</span>' : '';
-    return st + pend;
+      : (b.last_seen ? `<span class="badge danger">Offline · ${timeAgo(b.last_seen)}</span>` : '<span class="badge closed">Not connected yet</span>');
+    return st + (b.wifi_reset_pending ? ' <span class="badge warn">WiFi reset pending</span>' : '');
   }
-
   async function loadBoards() {
-    const apartment = currentBoardApartment();
-    if (!apartment) return;
+    if (!setupApt) return;
     try {
-      const res = await fetch('/api/boards?apartment=' + encodeURIComponent(apartment), { headers: authHeaders() });
-      const data = await res.json();
-      if (!res.ok) { document.getElementById('boardsBody').textContent = data.error || 'Could not load boards.'; return; }
-      boardsCache = data;
-      boardsApartmentShown = apartment;
+      const d = await api('GET', '/api/boards?' + aptQuery());
+      boardsCache = d.boards;
       boardsDirty = false;
       renderBoards();
-    } catch (e) { document.getElementById('boardsBody').textContent = 'Could not reach server.'; }
+    } catch (e) { document.getElementById('boardsBody').textContent = e.message; }
   }
-
   function renderBoards() {
-    const apartment = currentBoardApartment();
     const body = document.getElementById('boardsBody');
-    if (boardsCache.length === 0) {
-      body.innerHTML = 'No boards yet. Press <b>Add Board</b> (or <b>Auto-assign</b>), or just power on a board whose setup page has this apartment name — it will appear here by itself.';
-      return;
-    }
-    body.innerHTML = boardsCache.map(b => `
-      <div style="border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:12px; margin-bottom:10px; background:rgba(255,255,255,0.02);">
-        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:8px;">
-          <div style="font-size:13px; font-weight:600; color:#f1f5f9;">Board ${b.board_no}</div>
-          <div class="board-status" data-board="${b.board_no}">${boardStatusHtml(b)}</div>
-        </div>
-        <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:8px;">
+    if (layoutSaved.flats === 0) { body.textContent = 'Save the building (Step 1) first, then boards can be mapped to flats.'; return; }
+    if (boardsCache.length === 0) { body.textContent = 'No boards yet. Enter "Total boards" above and press Set, or use Auto-assign.'; return; }
+    body.innerHTML = boardsCache.map(b => {
+      const used = b.channels.filter(Boolean).length;
+      return `
+      <details data-board="${b.board_no}" ${openBoardSet.has(b.board_no) ? 'open' : ''} ontoggle="onBoardToggle(${b.board_no}, this.open)"
+               style="border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:10px 12px; margin-bottom:10px; background:rgba(255,255,255,0.02);">
+        <summary style="cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; list-style:none;">
+          <span style="font-size:13px; font-weight:600; color:#f1f5f9;">▸ Board ${b.board_no} <span style="color:#64748b; font-weight:400; font-size:11px;">· <span class="board-used" data-board="${b.board_no}">${used}</span>/8 sensors mapped</span></span>
+          <span class="board-status" data-board="${b.board_no}">${boardStatusHtml(b)}</span>
+        </summary>
+        <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:8px; margin-top:10px;">
           ${b.channels.map((c, i) => `
             <div>
               <div style="font-size:10px; color:#64748b; margin-bottom:3px;">TB${i + 1}</div>
-              <select class="board-ch" data-board="${b.board_no}" data-ch="${i}" onchange="boardsDirty = true;" style="width:100%; background:#0f172a; color:#fff; border:1px solid #334155; border-radius:6px; padding:6px 8px; font-size:12px;">
-                ${channelOptions(apartment, c ? `${c.floor}|${c.flat}` : '')}
-              </select>
+              <select class="board-ch" data-board="${b.board_no}" data-ch="${i}" data-val="${c ? esc(c.floor + '|' + c.flat) : ''}"
+                      onchange="onSlotChange()" style="width:100%; background:#0f172a; color:#fff; border:1px solid #334155; border-radius:6px; padding:6px 8px; font-size:12px;"></select>
             </div>`).join('')}
         </div>
         <div class="btns" style="margin-top:10px;">
           <button class="act open" onclick="saveBoard(${b.board_no})">Save Board ${b.board_no}</button>
-          <button class="act close" onclick="deleteBoard(${b.board_no})">Delete</button>
+          <button class="act limit" onclick="clearBoard(${b.board_no})">Clear all</button>
         </div>
-      </div>`).join('');
+      </details>`;
+    }).join('');
+    refreshSlotOptions(true);
   }
+  function onBoardToggle(n, isOpen) { if (isOpen) openBoardSet.add(n); else openBoardSet.delete(n); }
+  function onSlotChange() { boardsDirty = true; refreshSlotOptions(false); }
 
+  // Each flat can be used on one terminal only: every dropdown lists "not connected", its own pick, and flats nobody else picked.
+  function refreshSlotOptions(initial) {
+    const sels = [...document.querySelectorAll('.board-ch')];
+    const flats = layoutFlatList();
+    const known = new Set(flats.map(f => f.value));
+    const current = new Map();
+    sels.forEach(s => current.set(s, initial ? s.dataset.val : s.value));
+    const takenBy = new Map();
+    current.forEach((v, s) => { if (v) takenBy.set(v, s); });
+    sels.forEach(s => {
+      const mine = current.get(s);
+      let html = '<option value="">— not connected —</option>';
+      flats.forEach(f => {
+        if (takenBy.has(f.value) && takenBy.get(f.value) !== s) return;
+        html += `<option value="${esc(f.value)}">${esc(f.label)}</option>`;
+      });
+      if (mine && !known.has(mine)) { const [fl, ft] = mine.split('|'); html += `<option value="${esc(mine)}">${esc(floorLabel(fl))} · ${esc(ft)} (not in building list)</option>`; }
+      s.innerHTML = html;
+      s.value = mine || '';
+    });
+    boardsCache.forEach(b => {
+      const el = document.querySelector(`.board-used[data-board="${b.board_no}"]`);
+      if (el) el.textContent = [...document.querySelectorAll(`.board-ch[data-board="${b.board_no}"]`)].filter(s => s.value).length;
+    });
+  }
   function collectChannels(boardNo) {
     const out = new Array(8).fill(null);
     document.querySelectorAll(`.board-ch[data-board="${boardNo}"]`).forEach(sel => {
@@ -523,95 +735,114 @@
     });
     return out;
   }
+  const postBoardChannels = (n, channels) => api('POST', `/api/boards/${n}/channels`, { apartment: setupApt, channels });
 
-  async function postBoardChannels(boardNo, channels) {
-    const res = await fetch(`/api/boards/${boardNo}/channels`, {
-      method: 'POST', headers: authHeaders(),
-      body: JSON.stringify({ apartment: currentBoardApartment(), channels }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || ('Failed (' + res.status + ')'));
-  }
-
-  async function saveBoard(boardNo) {
+  async function saveBoard(n) {
     try {
-      await postBoardChannels(boardNo, collectChannels(boardNo));
-      boardsMsg(`Board ${boardNo} saved. It will use the new mapping on its next 30-second check-in.`, true);
+      await postBoardChannels(n, collectChannels(n));
+      boardsMsg(`Board ${n} saved. It starts using this within ~30 seconds.`, true);
       boardsDirty = false;
       await loadBoards();
     } catch (e) { boardsMsg(e.message, false); }
   }
-
-  async function addBoard() {
-    const apartment = currentBoardApartment();
-    if (!apartment) { boardsMsg('Invite a flat owner first.', false); return; }
-    const next = boardsCache.reduce((m, b) => Math.max(m, b.board_no), 0) + 1;
+  function clearBoard(n) {
+    document.querySelectorAll(`.board-ch[data-board="${n}"]`).forEach(s => { s.value = ''; });
+    onSlotChange();
+    boardsMsg(`Board ${n} cleared on screen — press Save Board ${n} to apply.`, true);
+  }
+  async function setTotalBoards() {
     try {
-      await postBoardChannels(next, new Array(8).fill(null));
-      boardsMsg(`Board ${next} added. Now choose the flat for each terminal and press Save.`, true);
-      await loadBoards();
+      const n = parseInt(document.getElementById('totalBoardsInput').value, 10);
+      if (isNaN(n) || n < 0) throw new Error('Enter a number of boards.');
+      await api('POST', '/api/layout', { apartment: setupApt, total_boards: n });
+      boardsMsg(`Total boards set to ${n}.`, true);
+      await loadLayout();
     } catch (e) { boardsMsg(e.message, false); }
   }
-
-  async function deleteBoard(boardNo) {
-    if (!confirm(`Delete Board ${boardNo}? The physical board will re-appear here by itself if it is still powered on with this apartment name.`)) return;
-    try {
-      const res = await fetch(`/api/boards/${boardNo}?apartment=${encodeURIComponent(currentBoardApartment())}`, { method: 'DELETE', headers: authHeaders() });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Delete failed');
-      boardsMsg(`Board ${boardNo} deleted.`, true);
-      await loadBoards();
-    } catch (e) { boardsMsg(e.message, false); }
-  }
-
-  // Fill boards 1..N in order: 8 flats per board, sorted by floor then flat number
+  // Fill boards 1..N in order, 8 flats each, floor by floor
   async function autoAssignBoards() {
-    const apartment = currentBoardApartment();
-    const flats = flatsOfApartment(apartment);
-    if (flats.length === 0) { boardsMsg('No flats found for this apartment.', false); return; }
+    const flats = [];
+    (layoutSaved.floors || []).slice().sort((a, b) => floorSortKey(a.floor) - floorSortKey(b.floor))
+      .forEach(f => f.flats.forEach(flat => flats.push({ floor: f.floor, flat })));
+    if (flats.length === 0) { boardsMsg('Save the building (Step 1) first.', false); return; }
     const needed = Math.ceil(flats.length / 8);
-    if (!confirm(`${flats.length} flats → ${needed} board(s), 8 flats each in floor/flat order.\n\nThis REPLACES the current mapping of all boards. Continue?`)) return;
+    if (!confirm(`${flats.length} flats → ${needed} board(s), 8 flats each, floor by floor.\n\nThis REPLACES the current mapping of all boards. Continue?`)) return;
     try {
-      // clear everything first so no flat is "already assigned" to a different board mid-way
-      for (const b of boardsCache) await postBoardChannels(b.board_no, new Array(8).fill(null));
+      for (const b of boardsCache) await postBoardChannels(b.board_no, new Array(8).fill(null));   // clear first: no flat is "taken" mid-way
       for (let n = 1; n <= needed; n++) {
-        const chunk = flats.slice((n - 1) * 8, n * 8);
         const channels = new Array(8).fill(null);
-        chunk.forEach((f, i) => { channels[i] = { floor: f.floor, flat: f.flat }; });
+        flats.slice((n - 1) * 8, n * 8).forEach((f, i) => { channels[i] = f; });
         await postBoardChannels(n, channels);
       }
-      boardsMsg(`Done — ${needed} board(s) mapped. Check the TB assignments below, then wire sensors to match.`, true);
-      await loadBoards();
+      if ((layoutSaved.total_boards || 0) < needed) await api('POST', '/api/layout', { apartment: setupApt, total_boards: needed });
+      boardsMsg(`Done — ${needed} board(s) mapped. Wire each sensor to the terminal shown.`, true);
+      await loadLayout();
     } catch (e) { boardsMsg(e.message, false); await loadBoards(); }
   }
-
   async function resetBoardsWifi() {
-    const apartment = currentBoardApartment();
-    if (!confirm(`Reset WiFi on ALL boards of "${apartment}"?\n\nEach board that is online will forget its WiFi within ~30 seconds and show its setup network (WaterBoard-xxxx). Someone must then connect to it and enter the new WiFi at 192.168.4.1.`)) return;
+    if (!confirm(`Reset WiFi on ALL boards of "${setupApt}"?\n\nEach board that is online forgets its WiFi within ~30 seconds and shows its setup network (WaterBoard-xxxx). Then connect to it and enter the new WiFi at 192.168.4.1.`)) return;
     try {
-      const res = await fetch('/api/boards/wifi-reset', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ apartment }) });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Failed');
-      boardsMsg(`WiFi reset sent to ${data.boards} board(s). Each one applies it on its next check-in (within ~30s).`, true);
+      const d = await api('POST', '/api/boards/wifi-reset', { apartment: setupApt });
+      boardsMsg(`WiFi reset sent to ${d.boards} board(s). Each applies it on its next check-in (within ~30s).`, true);
       await loadBoards();
     } catch (e) { boardsMsg(e.message, false); }
   }
-
-  // Light refresh so Online/Offline stays live without disturbing dropdowns being edited
+  // Light refresh: keeps Online/Offline live without disturbing dropdowns being edited
   async function pollBoardStatus() {
-    const apartment = currentBoardApartment();
-    if (!apartment || boardsApartmentShown !== apartment) return;
+    if (!setupApt) return;
     try {
-      const res = await fetch('/api/boards?apartment=' + encodeURIComponent(apartment), { headers: authHeaders() });
-      if (!res.ok) return;
-      const data = await res.json();
-      const sameSet = data.length === boardsCache.length && data.every((b, i) => b.board_no === boardsCache[i].board_no);
-      if (!sameSet && !boardsDirty) { boardsCache = data; renderBoards(); return; }
-      data.forEach(b => {
+      const d = await api('GET', '/api/boards?' + aptQuery());
+      const sameSet = d.boards.length === boardsCache.length && d.boards.every((b, i) => b.board_no === boardsCache[i].board_no);
+      if (!sameSet && !boardsDirty) { boardsCache = d.boards; renderBoards(); return; }
+      d.boards.forEach(b => {
         const el = document.querySelector(`.board-status[data-board="${b.board_no}"]`);
         if (el) el.innerHTML = boardStatusHtml(b);
       });
     } catch (e) { /* ignore transient errors */ }
+  }
+
+  // ----- Step 3: owner links -----
+  async function loadLinks() {
+    if (!setupApt || layoutSaved.flats === 0) { document.getElementById('linksBody').textContent = 'Save the building first.'; return; }
+    try { linksCache = await api('GET', '/api/layout/links?' + aptQuery()); renderLinks(); }
+    catch (e) { linksMsg(e.message, false); }
+  }
+  async function generateAllLinks() {
+    try {
+      linksCache = await api('POST', '/api/layout/links', { apartment: setupApt });
+      renderLinks();
+      linksMsg('Links ready. Copy or WhatsApp each one to its flat owner.', true);
+      loadFlats();
+    } catch (e) { linksMsg(e.message, false); }
+  }
+  function inviteUrl(token) { return `${window.location.origin}/signup.html?invite=${token}`; }
+  function renderLinks() {
+    const body = document.getElementById('linksBody');
+    if (linksCache.length === 0) { body.textContent = 'No flats yet.'; return; }
+    const joined = linksCache.filter(l => l.owner_name).length;
+    const pending = linksCache.filter(l => !l.owner_name && !l.token).length;
+    let html = `<div style="margin-bottom:8px;">${joined} of ${linksCache.length} owners joined${pending ? ` · <span style="color:#fcd34d;">${pending} flat(s) have no link yet — press "Generate links for all flats"</span>` : ''}</div>`;
+    html += linksCache.map((l, i) => `
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #0f172a; flex-wrap:wrap;">
+        <div><b style="color:#fff;">${esc(l.floor_label)} · Flat ${esc(l.flat)}</b></div>
+        <div style="display:flex; gap:6px; align-items:center;">
+          ${l.owner_name ? `<span class="badge open">✓ ${esc(l.owner_name)} joined</span>`
+            : l.token ? `<button class="act limit" onclick="copyLink(${i})">Copy link</button><button class="act open" onclick="whatsappLink(${i})">WhatsApp</button>`
+            : `<span class="badge closed">no link yet</span>`}
+        </div>
+      </div>`).join('');
+    body.innerHTML = html;
+  }
+  function copyLink(i) {
+    const url = inviteUrl(linksCache[i].token);
+    const done = () => linksMsg(`Link for flat ${linksCache[i].flat} copied.`, true);
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done, () => window.prompt('Copy this link:', url));
+    else window.prompt('Copy this link:', url);
+  }
+  function whatsappLink(i) {
+    const l = linksCache[i];
+    const text = `Hello! Join the ${setupApt} water management app for ${l.floor_label}, Flat ${l.flat}. Sign up here (link works once): ${inviteUrl(l.token)}`;
+    window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
   }
 
   function refreshAll() {
@@ -650,7 +881,7 @@
 
       renderNav();
       updatePaySelected();
-      syncBoardCard();
+      if (document.querySelector('.board-ch')) refreshSlotOptions(false);   // refresh owner names in the sensor dropdowns
     } catch (e) {
       console.error(e);
     }
@@ -658,8 +889,12 @@
 
   // ---------------- FLOOR -> FLATS -> DETAIL NAVIGATOR ----------------
   function floorSortKey(floor) {
-    const m = String(floor).match(/(\d+)/);
-    return m ? parseInt(m[1], 10) : 999;
+    const s = String(floor).toLowerCase();
+    const m = s.match(/(\d+)/);
+    const n = m ? parseInt(m[1], 10) : 0;
+    if (/^(cellar|basement)/.test(s)) return -100 + n / 100;
+    if (/^ground/.test(s)) return n / 100;
+    return m ? n : 999;
   }
   function flatSortKey(flat) {
     const n = parseInt(String(flat).replace(/\D/g, ''), 10);
@@ -710,7 +945,7 @@
         <div class="card" style="margin-bottom:10px; cursor:pointer;" onclick="openFloor('${fl}')">
           <div class="row">
             <div>
-              <div class="flatname" style="font-size:15px;">${fl}</div>
+              <div class="flatname" style="font-size:15px;">${esc(floorLabel(fl))}</div>
               <div class="flatsub">${flats.length} flat(s) · ${paid} paid</div>
             </div>
             <div style="color:#22d3ee; font-size:18px;">→</div>
@@ -755,7 +990,7 @@
   }
 
   function renderFlatsView() {
-    document.getElementById('navBreadcrumb').innerHTML = `<a style="color:#22d3ee; cursor:pointer;" onclick="renderFloorsView()">← Floors</a> / ${navFloor}`;
+    document.getElementById('navBreadcrumb').innerHTML = `<a style="color:#22d3ee; cursor:pointer;" onclick="renderFloorsView()">← Floors</a> / ${esc(floorLabel(navFloor))}`;
     const area = document.getElementById('navArea');
 
     // Flats shown here are only ones actually invited so far via "Invite a New Flat Owner" —
@@ -1101,6 +1336,8 @@
   loadAlerts();
   setInterval(loadFlats, 10000);
   setInterval(pollBoardStatus, 15000);
+  setInterval(() => { if (!document.hidden && setupApt) loadLinks(); }, 30000);
+  initSetup();
   setInterval(loadAlerts, 15000);
   if (user.role === 'super_admin') setInterval(loadAdminList, 10000);
 
