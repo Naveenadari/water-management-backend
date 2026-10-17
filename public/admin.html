@@ -932,6 +932,7 @@
   // Layout (all floors + all flats) of the apartment being browsed, so floors/flats show even before owners sign up
   let navLayout = null, navLayoutApt = null;
   let navLinkTokens = {};   // `${floor}|${flat}` -> invite token
+  let navBoards = [], navAssignKey = null, navAssignBoard = null, navAssignSlot = null;
   async function loadNavLayout() {
     let apt = null;
     if (user.role === 'admin') apt = user.apartment || null;
@@ -946,6 +947,13 @@
       navLayoutApt = apt;
       await loadNavTokens();
     } catch (e) { navLayout = null; navLayoutApt = null; }
+  }
+  async function loadNavBoards() {
+    if (!navLayout || !navLayout.apartment) { navBoards = []; return; }
+    try {
+      const d = await api('GET', '/api/boards?apartment=' + encodeURIComponent(navLayout.apartment));
+      navBoards = d.boards || [];
+    } catch (e) { /* ignore */ }
   }
   // Existing unused invite links, so a generated link is still visible after a refresh
   async function loadNavTokens() {
@@ -982,6 +990,7 @@
       const flats = await res.json();
       flatsCache = flats;
       await loadNavLayout();
+      if (navLayout && navView === 'flats' && !navAssignKey) await loadNavBoards();
 
       const emptyMsg = document.getElementById('emptyMsg');
       emptyMsg.classList.toggle('hidden', flats.length !== 0);
@@ -1087,8 +1096,9 @@
 
   function openFloor(floor) {
     floorsOpen = true;
-    navView = 'flats'; navFloor = floor;
+    navView = 'flats'; navFloor = floor; navAssignKey = null;
     renderNav();
+    loadNavBoards().then(() => { if (navView === 'flats' && !navAssignKey) renderFlatsView(); });
   }
 
   function timeAgo(iso) {
@@ -1172,14 +1182,117 @@
     window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
   }
 
+  // ----- add a flat to this floor / assign a flat to a board terminal -----
+  function findAssignment(floor, flat) {
+    for (const b of navBoards) for (let i = 0; i < b.channels.length; i++) {
+      const c = b.channels[i];
+      if (c && c.floor === floor && c.flat === flat) return { board: b.board_no, slot: i };
+    }
+    return null;
+  }
+  const selStyle = 'background:#0f172a; color:#fff; border:1px solid #334155; border-radius:6px; padding:5px 8px; font-size:12px;';
+  function navSensorRow(floor, flat) {
+    const k = `${floor}|${flat}`, f = esc(floor), t = esc(flat);
+    const as = findAssignment(floor, flat);
+    const wrap = inner => `<div style="flex-basis:100%; margin-top:8px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; font-size:12px; color:#94a3b8;">${inner}</div>`;
+    if (navAssignKey === k) {
+      const target = navBoards.find(b => b.board_no === navAssignBoard);
+      let slots = '';
+      if (target) target.channels.forEach((c, i) => {
+        const mine = as && as.board === target.board_no && as.slot === i;
+        if (!c || mine) slots += `<option value="${i}" ${navAssignSlot === i ? 'selected' : ''}>TB${i + 1}</option>`;
+      });
+      return wrap(`📟
+        <select style="${selStyle}" onchange="navAssignBoardChange(this.value)">${navBoards.map(b => `<option value="${b.board_no}" ${b.board_no === navAssignBoard ? 'selected' : ''}>Board ${b.board_no}</option>`).join('')}</select>
+        <select style="${selStyle}" onchange="navAssignSlot = parseInt(this.value, 10)">${slots || '<option value="">no free terminal</option>'}</select>
+        <button class="act open" onclick="navAssignSave('${f}','${t}')">Save</button>
+        <button class="act limit" onclick="navAssignCancel()">Cancel</button>`);
+    }
+    if (navBoards.length === 0) return wrap('📟 No boards yet — set "Total boards" in Step 2 first.');
+    if (as) return wrap(`📟 Sensor: <b style="color:#fff;">Board ${as.board} · TB${as.slot + 1}</b>
+        <button class="act limit" onclick="navAssignStart('${f}','${t}')">Change</button>
+        <button class="act close" onclick="navAssignRemove('${f}','${t}')">Remove</button>`);
+    return wrap(`📟 No sensor assigned <button class="act open" onclick="navAssignStart('${f}','${t}')">Assign sensor</button>`);
+  }
+  function navAssignStart(floor, flat) {
+    const as = findAssignment(floor, flat);
+    navAssignKey = `${floor}|${flat}`;
+    if (as) { navAssignBoard = as.board; navAssignSlot = as.slot; }
+    else {
+      const b = navBoards.find(x => x.channels.some(c => !c)) || navBoards[0];
+      navAssignBoard = b.board_no; navAssignSlot = b.channels.findIndex(c => !c);
+    }
+    renderFlatsView();
+  }
+  function navAssignBoardChange(v) {
+    navAssignBoard = parseInt(v, 10);
+    const b = navBoards.find(x => x.board_no === navAssignBoard);
+    navAssignSlot = b ? b.channels.findIndex(c => !c) : null;
+    renderFlatsView();
+  }
+  function navAssignCancel() { navAssignKey = null; renderFlatsView(); }
+  async function navPostBoard(n, channels) { await api('POST', `/api/boards/${n}/channels`, { apartment: navLayout.apartment, channels }); }
+  async function navAssignSave(floor, flat) {
+    try {
+      if (navAssignSlot === null || navAssignSlot === undefined || isNaN(navAssignSlot) || navAssignSlot < 0) throw new Error('This board has no free terminal. Choose another board.');
+      const chans = {};
+      navBoards.forEach(b => { chans[b.board_no] = b.channels.map(c => c ? { floor: c.floor, flat: c.flat } : null); });
+      const old = findAssignment(floor, flat);
+      if (old) chans[old.board][old.slot] = null;
+      chans[navAssignBoard][navAssignSlot] = { floor, flat };
+      if (old && old.board !== navAssignBoard) await navPostBoard(old.board, chans[old.board]);
+      await navPostBoard(navAssignBoard, chans[navAssignBoard]);
+      navAssignKey = null;
+      await loadNavBoards();
+      renderFlatsView();
+    } catch (e) { alert(e.message); await loadNavBoards(); renderFlatsView(); }
+  }
+  async function navAssignRemove(floor, flat) {
+    const old = findAssignment(floor, flat);
+    if (!old || !confirm(`Remove Flat ${flat} from Board ${old.board} · TB${old.slot + 1}?`)) return;
+    try {
+      const chans = navBoards.find(b => b.board_no === old.board).channels.map(c => c ? { floor: c.floor, flat: c.flat } : null);
+      chans[old.slot] = null;
+      await navPostBoard(old.board, chans);
+      await loadNavBoards();
+      renderFlatsView();
+    } catch (e) { alert(e.message); }
+  }
+  async function navAddFlat() {
+    try {
+      const inp = document.getElementById('navNewFlat');
+      const v = (inp.value || '').trim();
+      if (!v) throw new Error('Type the new flat number first.');
+      if (!navLayout || !navLayout.apartment) throw new Error('Save the building (Step 1) first.');
+      const floors = navLayout.floors.map(f => ({ floor: f.floor, label: f.label, flats: f.flats.slice() }));
+      const fl = floors.find(f => f.floor === navFloor);
+      if (!fl) throw new Error('This floor is not in the saved building. Add it in Step 1 first.');
+      if (fl.flats.some(x => x.toLowerCase() === v.toLowerCase())) throw new Error(`Flat ${v} already exists on this floor.`);
+      fl.flats.push(v);
+      await api('POST', '/api/layout', { apartment: navLayout.apartment, floors });
+      inp.value = '';
+      navLayoutApt = null;
+      await loadNavLayout();
+      if (setupApt && String(setupApt).toLowerCase() === String(navLayout.apartment).toLowerCase()) loadLayout();   // keep Step 1/2/3 in step
+      renderFlatsView();
+    } catch (e) { alert(e.message); }
+  }
+
   function renderFlatsView() {
     document.getElementById('navBreadcrumb').innerHTML = `<button class="act limit" onclick="backToFloors()">← Back</button> <span style="margin-left:8px;">${esc(floorLabel(navFloor))}</span>`;
     const area = document.getElementById('navArea');
 
+    const keepNew = (document.getElementById('navNewFlat') || {}).value || '';
     const fl = navFloorsData().find(x => x.floor === navFloor);
     const flats = fl ? fl.flats : [];
 
-    area.innerHTML = flats.map(({ flat, data: f }) => {
+    const addForm = `
+      <div class="card" style="margin-bottom:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <span style="font-size:12px; color:#94a3b8;">➕ Add a flat to ${esc(floorLabel(navFloor))}:</span>
+        <input id="navNewFlat" class="limitInput" style="width:110px;" placeholder="flat number" onkeydown="if (event.key === 'Enter') navAddFlat()" />
+        <button class="act open" onclick="navAddFlat()">Add flat</button>
+      </div>`;
+    area.innerHTML = addForm + flats.map(({ flat, data: f }) => {
       if (!f) {
         return `
         <div class="card" style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
@@ -1192,6 +1305,7 @@
           </div>
           <div style="display:flex; gap:6px; align-items:center;">${navLinkButtons(navFloor, flat)}</div>
           ${navLinkRow(navFloor, flat)}
+          ${navSensorRow(navFloor, flat)}
         </div>`;
       }
       const paid = f.subscription_active;
@@ -1214,9 +1328,12 @@
             <span style="color:#64748b;">→</span>
           </div>
           ${!f.owner_name ? navLinkRow(f.floor, f.flat) : ''}
+          ${navSensorRow(f.floor, f.flat)}
         </div>
       `;
     }).join('');
+    const ni = document.getElementById('navNewFlat');
+    if (ni && keepNew) { ni.value = keepNew; }
   }
 
   function openFlat(key) {
