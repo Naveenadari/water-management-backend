@@ -37,6 +37,16 @@ const TRIAL_DAYS = 7;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const EXPIRY_ALERT_DAYS = 3;
 
+// ESP32 sends a reading every ~30s; treat a sensor as "offline" once it hasn't
+// been heard from in 3x that interval (covers a missed send or two without false alarms).
+const SENSOR_OFFLINE_MS = 90 * 1000;
+function sensorStatusFor(receivedAtIso) {
+  if (!receivedAtIso) return { sensor_status: "never_connected", last_seen: null };
+  const lastSeenMs = new Date(receivedAtIso).getTime();
+  const isOnline = (Date.now() - lastSeenMs) <= SENSOR_OFFLINE_MS;
+  return { sensor_status: isOnline ? "online" : "offline", last_seen: receivedAtIso };
+}
+
 let razorpay = null;
 if (RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET) {
   razorpay = new Razorpay({ key_id: RAZORPAY_KEY_ID, key_secret: RAZORPAY_KEY_SECRET });
@@ -743,6 +753,161 @@ app.get("/api/device/command/:apartment/:floor/:flat", (req, res) => {
   res.json({ command });
 });
 
+// ================= ESP BOARDS (one universal firmware, mapping managed from the Admin page) =================
+// Each physical board has 8 flow-sensor channels (TB1..TB8). The board knows only its apartment name
+// and board number (typed once in its WiFi setup portal). Which flat is wired to which channel is
+// stored here and fetched by the board every cycle, so no re-flashing is ever needed.
+
+const BOARD_CHANNELS = 8;
+const BOARD_ONLINE_MS = 90 * 1000;
+
+function normalizeChannels(raw) {
+  const out = [];
+  for (let i = 0; i < BOARD_CHANNELS; i++) {
+    const c = Array.isArray(raw) ? raw[i] : null;
+    if (c && c.floor && c.flat) out.push({ floor: String(c.floor).trim(), flat: String(c.flat).trim() });
+    else out.push(null);
+  }
+  return out;
+}
+
+// All apartment names that actually have flat owners or pending invites (the source of truth for valid names)
+async function dbKnownApartments() {
+  const [owners, invites] = await Promise.all([dbGetAllFlatOwners(), dbGetUnusedFlatInvites()]);
+  const set = new Set();
+  owners.forEach((u) => u.apartment && set.add(u.apartment));
+  invites.forEach((i) => i.apartment && set.add(i.apartment));
+  return [...set];
+}
+async function resolveApartment(name) {
+  const wanted = String(name || "").trim().toLowerCase();
+  if (!wanted) return null;
+  const known = await dbKnownApartments();
+  return known.find((a) => a.trim().toLowerCase() === wanted) || null;
+}
+
+async function dbGetBoard(apartment, boardNo) {
+  const { data } = await supabase.from("esp_boards").select("*").eq("apartment", apartment).eq("board_no", boardNo).maybeSingle();
+  return data;
+}
+async function dbGetBoards(apartment) {
+  const { data } = await supabase.from("esp_boards").select("*").eq("apartment", apartment).order("board_no", { ascending: true });
+  return data || [];
+}
+function boardWifiResetPending(b) {
+  if (!b || !b.wifi_reset_requested_at) return false;
+  if (!b.wifi_reset_done_at) return true;
+  return new Date(b.wifi_reset_requested_at) > new Date(b.wifi_reset_done_at);
+}
+
+// Board asks "what are my channels?" every cycle. Doubles as heartbeat + remote-command channel.
+app.get("/api/device/config/:apartment/:board", ah(async (req, res) => {
+  const boardNo = parseInt(req.params.board, 10);
+  if (!boardNo || boardNo < 1 || boardNo > 999) return res.status(400).json({ error: "Invalid board number" });
+
+  const apartment = await resolveApartment(req.params.apartment);
+  if (!apartment) return res.status(404).json({ error: "unknown_apartment" });
+
+  let board = await dbGetBoard(apartment, boardNo);
+  const now = new Date().toISOString();
+  if (!board) {
+    await supabase.from("esp_boards").insert({ apartment, board_no: boardNo, channels: [], last_seen: now });
+    board = { channels: [] };
+  } else {
+    await supabase.from("esp_boards").update({ last_seen: now }).eq("apartment", apartment).eq("board_no", boardNo);
+  }
+
+  res.json({
+    apartment,                                  // canonical spelling — board must use this in its data URLs
+    channels: normalizeChannels(board.channels),
+    wifi_reset: boardWifiResetPending(board),
+  });
+}));
+
+app.post("/api/device/wifi-reset-ack/:apartment/:board", ah(async (req, res) => {
+  const boardNo = parseInt(req.params.board, 10);
+  const apartment = await resolveApartment(req.params.apartment);
+  if (!apartment || !boardNo) return res.status(404).json({ error: "unknown_board" });
+  await supabase.from("esp_boards").update({ wifi_reset_done_at: new Date().toISOString() }).eq("apartment", apartment).eq("board_no", boardNo);
+  res.json({ success: true });
+}));
+
+// ---- Admin-side board management ----
+async function adminCanUseApartment(user, apartment) {
+  if (user.role === "super_admin") return true;
+  const [owners, invites] = await Promise.all([dbGetAllFlatOwners(), dbGetUnusedFlatInvites()]);
+  return owners.some((u) => u.apartment === apartment && u.managed_by === user.phone)
+      || invites.some((i) => i.apartment === apartment && i.created_by === user.phone);
+}
+
+app.get("/api/boards", requireAuth, requireAdmin, ah(async (req, res) => {
+  const apartment = String(req.query.apartment || "");
+  if (!apartment) return res.status(400).json({ error: "apartment is required" });
+  if (!(await adminCanUseApartment(req.user, apartment))) return res.status(403).json({ error: "Not your apartment" });
+
+  const boards = await dbGetBoards(apartment);
+  res.json(boards.map((b) => ({
+    board_no: b.board_no,
+    channels: normalizeChannels(b.channels),
+    last_seen: b.last_seen,
+    online: !!b.last_seen && (Date.now() - new Date(b.last_seen).getTime()) <= BOARD_ONLINE_MS,
+    wifi_reset_pending: boardWifiResetPending(b),
+  })));
+}));
+
+app.post("/api/boards/:board/channels", requireAuth, requireAdmin, ah(async (req, res) => {
+  const boardNo = parseInt(req.params.board, 10);
+  const apartment = String((req.body && req.body.apartment) || "");
+  if (!boardNo || boardNo < 1 || boardNo > 999) return res.status(400).json({ error: "Invalid board number" });
+  if (!apartment) return res.status(400).json({ error: "apartment is required" });
+  if (!(await adminCanUseApartment(req.user, apartment))) return res.status(403).json({ error: "Not your apartment" });
+
+  const channels = normalizeChannels(req.body.channels);
+
+  // A flat can be wired to only one channel in the whole apartment
+  const seen = new Map();
+  for (let i = 0; i < channels.length; i++) {
+    const c = channels[i]; if (!c) continue;
+    const k = `${c.floor}/${c.flat}`;
+    if (seen.has(k)) return res.status(400).json({ error: `Flat ${k} is selected twice on this board (TB${seen.get(k) + 1} and TB${i + 1}).` });
+    seen.set(k, i);
+  }
+  const others = (await dbGetBoards(apartment)).filter((b) => b.board_no !== boardNo);
+  for (const b of others) {
+    const ch = normalizeChannels(b.channels);
+    for (let i = 0; i < ch.length; i++) {
+      if (ch[i] && seen.has(`${ch[i].floor}/${ch[i].flat}`)) {
+        return res.status(409).json({ error: `Flat ${ch[i].floor}/${ch[i].flat} is already assigned to Board ${b.board_no} (TB${i + 1}). Remove it there first.` });
+      }
+    }
+  }
+
+  const existing = await dbGetBoard(apartment, boardNo);
+  if (existing) await supabase.from("esp_boards").update({ channels }).eq("apartment", apartment).eq("board_no", boardNo);
+  else await supabase.from("esp_boards").insert({ apartment, board_no: boardNo, channels });
+  res.json({ success: true });
+}));
+
+app.delete("/api/boards/:board", requireAuth, requireAdmin, ah(async (req, res) => {
+  const boardNo = parseInt(req.params.board, 10);
+  const apartment = String(req.query.apartment || "");
+  if (!boardNo || !apartment) return res.status(400).json({ error: "board and apartment are required" });
+  if (!(await adminCanUseApartment(req.user, apartment))) return res.status(403).json({ error: "Not your apartment" });
+  await supabase.from("esp_boards").delete().eq("apartment", apartment).eq("board_no", boardNo);
+  res.json({ success: true });
+}));
+
+// Ask every board of an apartment to forget its WiFi (delivered on the board's next 30s poll)
+app.post("/api/boards/wifi-reset", requireAuth, requireAdmin, ah(async (req, res) => {
+  const apartment = String((req.body && req.body.apartment) || "");
+  if (!apartment) return res.status(400).json({ error: "apartment is required" });
+  if (!(await adminCanUseApartment(req.user, apartment))) return res.status(403).json({ error: "Not your apartment" });
+  const boards = await dbGetBoards(apartment);
+  if (boards.length === 0) return res.status(404).json({ error: "No boards registered for this apartment yet." });
+  await supabase.from("esp_boards").update({ wifi_reset_requested_at: new Date().toISOString() }).eq("apartment", apartment);
+  res.json({ success: true, boards: boards.length });
+}));
+
 // ================= APP/DASHBOARD -> BACKEND (auth required) =================
 
 // Admin toggles whether a flat has a valve fitted (flow-only flats hide valve controls)
@@ -799,6 +964,7 @@ app.get("/api/flats", requireAuth, requireAdmin, ah(async (req, res) => {
     const todayUsage = active ? await dbGetDailyUsage(key, todayStr()) : null;
     const hasValve = await dbGetHasValve(key);
     const calibration = await dbGetCalibration(key);
+    const { sensor_status, last_seen } = sensorStatusFor(flatData ? flatData.received_at : null);
 
     return {
       apartment, floor, flat,
@@ -814,6 +980,8 @@ app.get("/api/flats", requireAuth, requireAdmin, ah(async (req, res) => {
       total_liters: active ? (flatData ? Number(flatData.total_liters) || 0 : 0) : null,
       today_usage: active ? todayUsage : null,
       limit,
+      sensor_status,
+      last_seen,
     };
   }));
 
@@ -895,11 +1063,13 @@ app.get("/api/flats/:apartment/:floor/:flat", requireAuth, ah(async (req, res) =
   const now = new Date();
   const isTrial = now < trialEnd;
   const daysRemaining = Math.max(0, Math.ceil((reference.getTime() - now.getTime()) / MS_PER_DAY));
+  const latest = active ? await dbGetFlatData(key) : null;
+  const { sensor_status, last_seen } = sensorStatusFor(latest ? latest.received_at : null);
 
   res.json({
     subscription_active: active,
     has_valve: hasValve,
-    latest: active ? await dbGetFlatData(key) : null,
+    latest,
     history: active ? await dbGetHistory(key) : [],
     limit,
     subscription: {
@@ -907,6 +1077,8 @@ app.get("/api/flats/:apartment/:floor/:flat", requireAuth, ah(async (req, res) =
       valid_until: reference.toISOString(),
       days_remaining: daysRemaining,
     },
+    sensor_status,
+    last_seen,
   });
 }));
 
