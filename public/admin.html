@@ -78,6 +78,7 @@
     <div class="card"><b id="statOpen">—</b><small>Valves Open</small></div>
     <div class="card"><b id="statTotal">—</b><small>Total Liters (all time)</small></div>
     <div class="card"><b id="statOver">—</b><small>Near/Over Limit</small></div>
+    <div class="card"><b id="statOffline" style="color:#fca5a5;">—</b><small>Sensors Offline</small></div>
   </div>
 
   <div id="superAdminCard" class="card hidden" style="margin-top:8px; border-color:rgba(251,191,36,0.4);">
@@ -167,6 +168,27 @@
       </div>
     </div>
     <div id="inviteError" class="errbox" style="display:none; margin-top:10px;"></div>
+  </div>
+
+  <div id="boardsCard" class="card" style="margin-top:8px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:6px;">
+      <div style="font-size:13px; font-weight:600; color:#fff;">📟 ESP32 Boards &amp; Sensor Mapping</div>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <label style="font-size:11px;color:#94a3b8;">Apartment</label>
+        <select id="boardApartment" onchange="onBoardApartmentChange()" style="background:#0f172a; color:#fff; border:1px solid #334155; border-radius:6px; padding:5px 8px; font-size:12px;"></select>
+      </div>
+    </div>
+    <div style="font-size:11px; color:#64748b; margin-bottom:10px; line-height:1.5;">
+      Each board has 8 sensor terminals (TB1–TB8). Pick which flat is wired to each terminal — the board picks this up automatically within ~30 seconds, no code upload needed.
+      A new board appears here by itself after you enter its <b>apartment name</b> and <b>board number</b> in its WiFi setup page.
+    </div>
+    <div class="btns" style="margin-bottom:10px;">
+      <button class="act limit" onclick="addBoard()">➕ Add Board</button>
+      <button class="act limit" onclick="autoAssignBoards()">⚡ Auto-assign (8 flats per board)</button>
+      <button class="act close" onclick="resetBoardsWifi()">📶 Reset WiFi of all boards</button>
+    </div>
+    <div id="boardsBody" style="font-size:12px; color:#94a3b8;">Loading…</div>
+    <div id="boardsMsg" style="font-size:11px; margin-top:8px;"></div>
   </div>
 
   <div class="card" style="margin-top:8px;">
@@ -387,6 +409,211 @@
     return `<span class="badge open">${pct.toFixed(0)}%</span>`;
   }
 
+  // ---------------- ESP32 BOARDS CARD ----------------
+  let boardsCache = [];
+  let boardsDirty = false;      // true while the admin has unsaved dropdown changes — don't redraw over them
+  let boardsApartmentShown = null;
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function boardsMsg(text, ok) {
+    const el = document.getElementById('boardsMsg');
+    el.style.color = ok ? '#6ee7b7' : '#fca5a5';
+    el.textContent = text || '';
+  }
+  function currentBoardApartment() { return document.getElementById('boardApartment').value; }
+
+  // Called after every flats refresh: keeps the apartment dropdown in step with the real invited flats
+  function syncBoardCard() {
+    const sel = document.getElementById('boardApartment');
+    const apts = [...new Set(flatsCache.map(f => f.apartment))].sort();
+    const prev = sel.value;
+    const same = apts.length === sel.options.length && apts.every((a, i) => sel.options[i].value === a);
+    if (!same) {
+      sel.innerHTML = apts.map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join('');
+      if (apts.includes(prev)) sel.value = prev;
+    }
+    if (apts.length === 0) {
+      document.getElementById('boardsBody').textContent = 'Invite at least one flat owner first — then boards can be mapped to flats here.';
+      boardsApartmentShown = null;
+      return;
+    }
+    if (boardsApartmentShown !== sel.value) { loadBoards(); }
+  }
+
+  function onBoardApartmentChange() { boardsDirty = false; loadBoards(); }
+
+  function flatsOfApartment(apartment) {
+    return flatsCache.filter(f => f.apartment === apartment)
+      .sort((a, b) => (floorSortKey(a.floor) - floorSortKey(b.floor)) || (flatSortKey(a.flat) - flatSortKey(b.flat)));
+  }
+
+  function channelOptions(apartment, selectedValue) {
+    const flats = flatsOfApartment(apartment);
+    let html = '<option value="">— not connected —</option>';
+    let found = false;
+    html += flats.map(f => {
+      const v = `${f.floor}|${f.flat}`;
+      if (v === selectedValue) found = true;
+      return `<option value="${esc(v)}" ${v === selectedValue ? 'selected' : ''}>${esc(f.floor)} · Flat ${esc(f.flat)}${f.owner_name ? ' (' + esc(f.owner_name) + ')' : ''}</option>`;
+    }).join('');
+    if (selectedValue && !found) {
+      const [fl, ft] = selectedValue.split('|');
+      html += `<option value="${esc(selectedValue)}" selected>${esc(fl)} · Flat ${esc(ft)} (not in list)</option>`;
+    }
+    return html;
+  }
+
+  function boardStatusHtml(b) {
+    const st = b.online
+      ? '<span class="badge open">Online</span>'
+      : (b.last_seen ? `<span class="badge danger">Offline · ${timeAgo(b.last_seen)}</span>` : '<span class="badge closed">Never connected</span>');
+    const pend = b.wifi_reset_pending ? ' <span class="badge warn">WiFi reset pending</span>' : '';
+    return st + pend;
+  }
+
+  async function loadBoards() {
+    const apartment = currentBoardApartment();
+    if (!apartment) return;
+    try {
+      const res = await fetch('/api/boards?apartment=' + encodeURIComponent(apartment), { headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok) { document.getElementById('boardsBody').textContent = data.error || 'Could not load boards.'; return; }
+      boardsCache = data;
+      boardsApartmentShown = apartment;
+      boardsDirty = false;
+      renderBoards();
+    } catch (e) { document.getElementById('boardsBody').textContent = 'Could not reach server.'; }
+  }
+
+  function renderBoards() {
+    const apartment = currentBoardApartment();
+    const body = document.getElementById('boardsBody');
+    if (boardsCache.length === 0) {
+      body.innerHTML = 'No boards yet. Press <b>Add Board</b> (or <b>Auto-assign</b>), or just power on a board whose setup page has this apartment name — it will appear here by itself.';
+      return;
+    }
+    body.innerHTML = boardsCache.map(b => `
+      <div style="border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:12px; margin-bottom:10px; background:rgba(255,255,255,0.02);">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:8px;">
+          <div style="font-size:13px; font-weight:600; color:#f1f5f9;">Board ${b.board_no}</div>
+          <div class="board-status" data-board="${b.board_no}">${boardStatusHtml(b)}</div>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:8px;">
+          ${b.channels.map((c, i) => `
+            <div>
+              <div style="font-size:10px; color:#64748b; margin-bottom:3px;">TB${i + 1}</div>
+              <select class="board-ch" data-board="${b.board_no}" data-ch="${i}" onchange="boardsDirty = true;" style="width:100%; background:#0f172a; color:#fff; border:1px solid #334155; border-radius:6px; padding:6px 8px; font-size:12px;">
+                ${channelOptions(apartment, c ? `${c.floor}|${c.flat}` : '')}
+              </select>
+            </div>`).join('')}
+        </div>
+        <div class="btns" style="margin-top:10px;">
+          <button class="act open" onclick="saveBoard(${b.board_no})">Save Board ${b.board_no}</button>
+          <button class="act close" onclick="deleteBoard(${b.board_no})">Delete</button>
+        </div>
+      </div>`).join('');
+  }
+
+  function collectChannels(boardNo) {
+    const out = new Array(8).fill(null);
+    document.querySelectorAll(`.board-ch[data-board="${boardNo}"]`).forEach(sel => {
+      if (sel.value) { const [floor, flat] = sel.value.split('|'); out[parseInt(sel.dataset.ch, 10)] = { floor, flat }; }
+    });
+    return out;
+  }
+
+  async function postBoardChannels(boardNo, channels) {
+    const res = await fetch(`/api/boards/${boardNo}/channels`, {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ apartment: currentBoardApartment(), channels }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || ('Failed (' + res.status + ')'));
+  }
+
+  async function saveBoard(boardNo) {
+    try {
+      await postBoardChannels(boardNo, collectChannels(boardNo));
+      boardsMsg(`Board ${boardNo} saved. It will use the new mapping on its next 30-second check-in.`, true);
+      boardsDirty = false;
+      await loadBoards();
+    } catch (e) { boardsMsg(e.message, false); }
+  }
+
+  async function addBoard() {
+    const apartment = currentBoardApartment();
+    if (!apartment) { boardsMsg('Invite a flat owner first.', false); return; }
+    const next = boardsCache.reduce((m, b) => Math.max(m, b.board_no), 0) + 1;
+    try {
+      await postBoardChannels(next, new Array(8).fill(null));
+      boardsMsg(`Board ${next} added. Now choose the flat for each terminal and press Save.`, true);
+      await loadBoards();
+    } catch (e) { boardsMsg(e.message, false); }
+  }
+
+  async function deleteBoard(boardNo) {
+    if (!confirm(`Delete Board ${boardNo}? The physical board will re-appear here by itself if it is still powered on with this apartment name.`)) return;
+    try {
+      const res = await fetch(`/api/boards/${boardNo}?apartment=${encodeURIComponent(currentBoardApartment())}`, { method: 'DELETE', headers: authHeaders() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Delete failed');
+      boardsMsg(`Board ${boardNo} deleted.`, true);
+      await loadBoards();
+    } catch (e) { boardsMsg(e.message, false); }
+  }
+
+  // Fill boards 1..N in order: 8 flats per board, sorted by floor then flat number
+  async function autoAssignBoards() {
+    const apartment = currentBoardApartment();
+    const flats = flatsOfApartment(apartment);
+    if (flats.length === 0) { boardsMsg('No flats found for this apartment.', false); return; }
+    const needed = Math.ceil(flats.length / 8);
+    if (!confirm(`${flats.length} flats → ${needed} board(s), 8 flats each in floor/flat order.\n\nThis REPLACES the current mapping of all boards. Continue?`)) return;
+    try {
+      // clear everything first so no flat is "already assigned" to a different board mid-way
+      for (const b of boardsCache) await postBoardChannels(b.board_no, new Array(8).fill(null));
+      for (let n = 1; n <= needed; n++) {
+        const chunk = flats.slice((n - 1) * 8, n * 8);
+        const channels = new Array(8).fill(null);
+        chunk.forEach((f, i) => { channels[i] = { floor: f.floor, flat: f.flat }; });
+        await postBoardChannels(n, channels);
+      }
+      boardsMsg(`Done — ${needed} board(s) mapped. Check the TB assignments below, then wire sensors to match.`, true);
+      await loadBoards();
+    } catch (e) { boardsMsg(e.message, false); await loadBoards(); }
+  }
+
+  async function resetBoardsWifi() {
+    const apartment = currentBoardApartment();
+    if (!confirm(`Reset WiFi on ALL boards of "${apartment}"?\n\nEach board that is online will forget its WiFi within ~30 seconds and show its setup network (WaterBoard-xxxx). Someone must then connect to it and enter the new WiFi at 192.168.4.1.`)) return;
+    try {
+      const res = await fetch('/api/boards/wifi-reset', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ apartment }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      boardsMsg(`WiFi reset sent to ${data.boards} board(s). Each one applies it on its next check-in (within ~30s).`, true);
+      await loadBoards();
+    } catch (e) { boardsMsg(e.message, false); }
+  }
+
+  // Light refresh so Online/Offline stays live without disturbing dropdowns being edited
+  async function pollBoardStatus() {
+    const apartment = currentBoardApartment();
+    if (!apartment || boardsApartmentShown !== apartment) return;
+    try {
+      const res = await fetch('/api/boards?apartment=' + encodeURIComponent(apartment), { headers: authHeaders() });
+      if (!res.ok) return;
+      const data = await res.json();
+      const sameSet = data.length === boardsCache.length && data.every((b, i) => b.board_no === boardsCache[i].board_no);
+      if (!sameSet && !boardsDirty) { boardsCache = data; renderBoards(); return; }
+      data.forEach(b => {
+        const el = document.querySelector(`.board-status[data-board="${b.board_no}"]`);
+        if (el) el.innerHTML = boardStatusHtml(b);
+      });
+    } catch (e) { /* ignore transient errors */ }
+  }
+
   function refreshAll() {
     loadFlats();
     if (user.role === 'super_admin') loadAdminList();
@@ -403,13 +630,14 @@
       const emptyMsg = document.getElementById('emptyMsg');
       emptyMsg.classList.toggle('hidden', flats.length !== 0);
 
-      let openCount = 0, totalAll = 0, overCount = 0, paidCount = 0, pendingCount = 0;
+      let openCount = 0, totalAll = 0, overCount = 0, paidCount = 0, pendingCount = 0, offlineCount = 0;
       flats.forEach(f => {
         if (f.valve_status === 'OPEN') openCount++;
         const paid = f.subscription_active;
         if (paid) totalAll += (f.total_liters || 0);
         if (paid && f.limit && (f.today_usage || 0) / f.limit >= 0.8) overCount++;
         if (f.owner_name) { if (paid) paidCount++; else pendingCount++; }
+        if (f.owner_name && f.sensor_status === 'offline') offlineCount++;
       });
 
       document.getElementById('statFlats').textContent = flats.length;
@@ -418,9 +646,11 @@
       document.getElementById('statOpen').textContent = openCount;
       document.getElementById('statTotal').textContent = totalAll.toFixed(0);
       document.getElementById('statOver').textContent = overCount;
+      document.getElementById('statOffline').textContent = offlineCount;
 
       renderNav();
       updatePaySelected();
+      syncBoardCard();
     } catch (e) {
       console.error(e);
     }
@@ -495,6 +725,28 @@
     renderNav();
   }
 
+  function timeAgo(iso) {
+    if (!iso) return '';
+    const secs = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+    if (secs < 60) return secs + 's ago';
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return mins + 'm ago';
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + 'h ago';
+    return Math.floor(hrs / 24) + 'd ago';
+  }
+
+  function sensorBadgeHtml(f, withTime) {
+    if (f.sensor_status === 'online') {
+      return `<span class="badge open">🟢 Online</span>`;
+    }
+    if (f.sensor_status === 'offline') {
+      const t = withTime && f.last_seen ? ` · ${timeAgo(f.last_seen)}` : '';
+      return `<span class="badge danger">🔴 Offline${t}</span>`;
+    }
+    return `<span class="badge closed">⚪ No Data</span>`;
+  }
+
   function avatarHtml(pic, size) {
     size = size || 32;
     return pic
@@ -526,6 +778,7 @@
           <div style="display:flex; align-items:center; gap:10px;">
             ${paid ? '<span class="badge open">Paid</span>' : '<span class="badge warn">Pending</span>'}
             ${f.has_valve !== false ? `<span class="badge ${f.valve_status === 'OPEN' ? 'open' : 'closed'}">${f.valve_status === 'OPEN' ? 'Open' : 'Closed'}</span>` : '<span class="badge closed">No Valve</span>'}
+            ${sensorBadgeHtml(f, false)}
             <span style="color:#64748b;">→</span>
           </div>
         </div>
@@ -602,6 +855,13 @@
             <input class="limitInput" type="number" placeholder="Liters/day" id="limit-${f.apartment}-${f.floor}-${f.flat}" value="${f.limit || ''}" />
             <button class="act limit" onclick="setLimit('${f.apartment}','${f.floor}','${f.flat}')">Set</button>
           </div>
+        </div>
+
+        <div style="margin-bottom:14px;">
+          <div style="font-size:12px; color:#94a3b8; margin-bottom:6px; display:flex; align-items:center; gap:8px;">
+            📡 Sensor / ESP32: ${sensorBadgeHtml(f, true)}
+          </div>
+          <div style="font-size:11px; color:#64748b;">${f.last_seen ? `Last data received: ${new Date(f.last_seen).toLocaleString()}` : 'No data ever received from this sensor yet.'}</div>
         </div>
 
         <div style="margin-bottom:14px;">
@@ -840,6 +1100,7 @@
   loadFlats();
   loadAlerts();
   setInterval(loadFlats, 10000);
+  setInterval(pollBoardStatus, 15000);
   setInterval(loadAlerts, 15000);
   if (user.role === 'super_admin') setInterval(loadAdminList, 10000);
 
