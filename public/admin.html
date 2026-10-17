@@ -853,10 +853,13 @@
       loadFlats();
     } catch (e) { linksMsg(e.message, false); }
   }
-  async function generateOneLink(i) {
+  async function generateOneLink(i, regenerate) {
     const l = linksCache[i];
     try {
-      linksCache = await api('POST', '/api/layout/links', { apartment: setupApt, floor: l.floor, flat: l.flat });
+      if (regenerate && !confirm('Create a NEW link for this flat? The old link will stop working.')) return;
+      const body = { apartment: setupApt, floor: l.floor, flat: l.flat };
+      if (regenerate) body.regenerate = true;
+      linksCache = await api('POST', '/api/layout/links', body);
       renderLinks();
       linksMsg(`Link created for ${l.floor_label} · Flat ${l.flat}. Copy or WhatsApp it below.`, true);
       loadFlats();
@@ -897,9 +900,15 @@
                     <b style="color:#fff;">Flat ${esc(l.flat)}</b>
                     <div style="display:flex; gap:6px; align-items:center;">
                       ${l.owner_name ? `<span class="badge open">✓ ${esc(l.owner_name)} joined</span>`
-                        : l.token ? `<button class="act limit" onclick="copyLink(${i})">Copy link</button><button class="act open" onclick="whatsappLink(${i})">WhatsApp</button>`
-                        : `<button class="act open" onclick="generateOneLink(${i})">Generate link</button>`}
+                        : l.token ? '' : `<button class="act open" onclick="generateOneLink(${i})">Generate link</button>`}
                     </div>
+                    ${(!l.owner_name && l.token) ? `
+                      <div style="flex-basis:100%; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                        <input readonly value="${esc(inviteUrl(l.token))}" onclick="this.select()" style="${linkInputStyle}" />
+                        <button class="act limit" onclick="copyLink(this, ${i})">Copy</button>
+                        <button class="act open" onclick="whatsappLink(${i})">WhatsApp</button>
+                        <button class="act close" onclick="generateOneLink(${i}, true)">Regenerate</button>
+                      </div>` : ''}
                   </div>`).join('')}
               </div>
             </details>`;
@@ -908,12 +917,7 @@
       </details>`;
   }
   function toggleLinkFloor(floor, isOpen) { if (isOpen) linksOpenFloors.add(floor); else linksOpenFloors.delete(floor); }
-  function copyLink(i) {
-    const url = inviteUrl(linksCache[i].token);
-    const done = () => linksMsg(`Link for flat ${linksCache[i].flat} copied.`, true);
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done, () => window.prompt('Copy this link:', url));
-    else window.prompt('Copy this link:', url);
-  }
+  function copyLink(btn, i) { copyText(inviteUrl(linksCache[i].token), btn); }
   function whatsappLink(i) {
     const l = linksCache[i];
     const text = `Hello! Join the ${setupApt} water management app for ${l.floor_label}, Flat ${l.flat}. Sign up here (link works once): ${inviteUrl(l.token)}`;
@@ -927,6 +931,7 @@
 
   // Layout (all floors + all flats) of the apartment being browsed, so floors/flats show even before owners sign up
   let navLayout = null, navLayoutApt = null;
+  let navLinkTokens = {};   // `${floor}|${flat}` -> invite token
   async function loadNavLayout() {
     let apt = null;
     if (user.role === 'admin') apt = user.apartment || null;
@@ -939,7 +944,17 @@
     try {
       navLayout = await api('GET', '/api/layout?apartment=' + encodeURIComponent(apt));
       navLayoutApt = apt;
+      await loadNavTokens();
     } catch (e) { navLayout = null; navLayoutApt = null; }
+  }
+  // Existing unused invite links, so a generated link is still visible after a refresh
+  async function loadNavTokens() {
+    if (!navLayout || !navLayout.apartment) return;
+    try {
+      const list = await api('GET', '/api/layout/links?apartment=' + encodeURIComponent(navLayout.apartment));
+      navLinkTokens = {};
+      list.forEach(e => { if (e.token) navLinkTokens[`${e.floor}|${e.flat}`] = e.token; });
+    } catch (e) { /* ignore */ }
   }
   // Floors -> flats for the navigator: every flat from the saved building, merged with live data where it exists
   function navFloorsData() {
@@ -981,7 +996,7 @@
         if (f.owner_name && f.sensor_status === 'offline') offlineCount++;
       });
 
-      document.getElementById('statFlats').textContent = flats.length;
+      document.getElementById('statFlats').textContent = flats.filter(f => f.owner_name).length;
       document.getElementById('statPaid').textContent = paidCount;
       document.getElementById('statPending').textContent = pendingCount;
       document.getElementById('statOpen').textContent = openCount;
@@ -1106,18 +1121,43 @@
   }
 
   // ----- per-flat invite link (in the floor -> flats list) -----
-  let navLinkTokens = {};   // `${floor}|${flat}` -> invite token
-  function navLinkButtons(floor, flat) {
-    const k = `${floor}|${flat}`;
-    const f = esc(floor), t = esc(flat);
-    return navLinkTokens[k]
-      ? `<button class="act limit" onclick="navCopyLink('${f}','${t}')">Copy link</button><button class="act open" onclick="navWhatsappLink('${f}','${t}')">WhatsApp</button>`
-      : `<button class="act open" onclick="navGenLink('${f}','${t}')">Generate link</button>`;
+  const linkInputStyle = 'flex:1; min-width:180px; background:#0f172a; border:1px solid #334155; color:#22d3ee; border-radius:8px; padding:7px 8px; font-size:11px;';
+  function flashBtn(btn, text) {
+    if (!btn) return;
+    const old = btn.textContent;
+    btn.textContent = text;
+    setTimeout(() => { btn.textContent = old; }, 1500);
   }
-  async function navGenLink(floor, flat) {
+  function copyText(url, btn) {
+    const ok = () => flashBtn(btn, '✓ Copied');
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(ok, () => window.prompt('Copy this link:', url));
+    else window.prompt('Copy this link:', url);
+  }
+  // Header button: only while no link exists yet
+  function navLinkButtons(floor, flat) {
+    if (navLinkTokens[`${floor}|${flat}`]) return '';
+    return `<button class="act open" onclick="navGenLink('${esc(floor)}','${esc(flat)}')">Generate link</button>`;
+  }
+  // Full-width row under the flat once a link exists: the link itself + Copy / WhatsApp / Regenerate
+  function navLinkRow(floor, flat) {
+    const tok = navLinkTokens[`${floor}|${flat}`];
+    if (!tok) return '';
+    const f = esc(floor), t = esc(flat);
+    return `
+      <div style="flex-basis:100%; margin-top:8px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+        <input readonly value="${esc(inviteUrl(tok))}" onclick="this.select()" style="${linkInputStyle}" />
+        <button class="act limit" onclick="navCopyLink(this,'${f}','${t}')">Copy</button>
+        <button class="act open" onclick="navWhatsappLink('${f}','${t}')">WhatsApp</button>
+        <button class="act close" onclick="navGenLink('${f}','${t}', true)">Regenerate</button>
+      </div>`;
+  }
+  async function navGenLink(floor, flat, regenerate) {
     try {
       if (!navLayout || !navLayout.apartment) throw new Error('Save the building (Step 1) first.');
-      const list = await api('POST', '/api/layout/links', { apartment: navLayout.apartment, floor, flat });
+      if (regenerate && !confirm('Create a NEW link for this flat? The old link will stop working.')) return;
+      const body = { apartment: navLayout.apartment, floor, flat };
+      if (regenerate) body.regenerate = true;
+      const list = await api('POST', '/api/layout/links', body);
       const e = list.find(x => x.floor === floor && x.flat === flat);
       if (!e || !e.token) throw new Error(e && e.owner_name ? 'This flat already has an owner.' : 'Could not create the link.');
       navLinkTokens[`${floor}|${flat}`] = e.token;
@@ -1125,11 +1165,7 @@
       loadFlats();
     } catch (e) { alert(e.message); }
   }
-  function navCopyLink(floor, flat) {
-    const url = inviteUrl(navLinkTokens[`${floor}|${flat}`]);
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(() => alert('Link copied'), () => window.prompt('Copy this link:', url));
-    else window.prompt('Copy this link:', url);
-  }
+  function navCopyLink(btn, floor, flat) { copyText(inviteUrl(navLinkTokens[`${floor}|${flat}`]), btn); }
   function navWhatsappLink(floor, flat) {
     const apt = navLayout ? navLayout.apartment : '';
     const text = `Hello! Join the ${apt} water management app for ${floorLabel(floor)}, Flat ${flat}. Sign up here (link works once): ${inviteUrl(navLinkTokens[`${floor}|${flat}`])}`;
@@ -1146,7 +1182,7 @@
     area.innerHTML = flats.map(({ flat, data: f }) => {
       if (!f) {
         return `
-        <div class="card" style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+        <div class="card" style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
           <div style="display:flex; align-items:center; gap:10px;">
             ${avatarHtml(null)}
             <div>
@@ -1155,12 +1191,13 @@
             </div>
           </div>
           <div style="display:flex; gap:6px; align-items:center;">${navLinkButtons(navFloor, flat)}</div>
+          ${navLinkRow(navFloor, flat)}
         </div>`;
       }
       const paid = f.subscription_active;
       const key = `${f.apartment}|${f.floor}|${f.flat}`;
       return `
-        <div class="card" style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+        <div class="card" style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
           <div style="display:flex; align-items:center; gap:10px; cursor:pointer; flex:1;" onclick="openFlat('${key}')">
             ${!paid && f.owner_name ? `<input type="checkbox" class="payCheckbox" data-key="${key}" onclick="event.stopPropagation()" onchange="updatePaySelected()" />` : ''}
             ${f.owner_name ? avatarHtml(f.owner_pic) : ''}
@@ -1176,6 +1213,7 @@
             ${sensorBadgeHtml(f, false)}
             <span style="color:#64748b;">→</span>
           </div>
+          ${!f.owner_name ? navLinkRow(f.floor, f.flat) : ''}
         </div>
       `;
     }).join('');
