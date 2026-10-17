@@ -855,32 +855,6 @@
       </details>`;
   }
   function toggleLinkFloor(floor, isOpen) { if (isOpen) linksOpenFloors.add(floor); else linksOpenFloors.delete(floor); }
-  async function generateOneLink(i) {
-    const l = linksCache[i];
-    try {
-      linksCache = await api('POST', '/api/layout/links', { apartment: setupApt, floor: l.floor, flat: l.flat });
-      renderLinks();
-      linksMsg(`Link created for ${l.floor_label} · Flat ${l.flat}. Copy or WhatsApp it below.`, true);
-      loadFlats();
-    } catch (e) { linksMsg(e.message, false); }
-  }
-  function inviteUrl(token) { return `${window.location.origin}/signup.html?invite=${token}`; }
-  function renderLinks() {
-    const body = document.getElementById('linksBody');
-    if (linksCache.length === 0) { body.textContent = 'No flats yet.'; return; }
-    const joined = linksCache.filter(l => l.owner_name).length;
-    let html = `<div style="margin-bottom:8px;">${joined} of ${linksCache.length} owners joined</div>`;
-    html += linksCache.map((l, i) => `
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #0f172a; flex-wrap:wrap;">
-        <div><b style="color:#fff;">${esc(l.floor_label)} · Flat ${esc(l.flat)}</b></div>
-        <div style="display:flex; gap:6px; align-items:center;">
-          ${l.owner_name ? `<span class="badge open">✓ ${esc(l.owner_name)} joined</span>`
-            : l.token ? `<button class="act limit" onclick="copyLink(${i})">Copy link</button><button class="act open" onclick="whatsappLink(${i})">WhatsApp</button>`
-            : `<button class="act open" onclick="generateOneLink(${i})">Generate link</button>`}
-        </div>
-      </div>`).join('');
-    body.innerHTML = html;
-  }
   function copyLink(i) {
     const url = inviteUrl(linksCache[i].token);
     const done = () => linksMsg(`Link for flat ${linksCache[i].flat} copied.`, true);
