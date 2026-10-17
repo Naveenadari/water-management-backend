@@ -135,10 +135,11 @@
       <div style="font-size:13px; font-weight:600; color:#fcd34d;">📋 Apartment Admins</div>
       <button class="refresh" style="padding:4px 10px; font-size:11px;" onclick="loadAdminList()">↻ Refresh</button>
     </div>
-    <div id="adminListBody" style="font-size:13px;">Loading…</div>
+    <button id="adminsToggle" class="act limit" style="width:100%; padding:10px 12px; font-size:13px; text-align:left;" onclick="toggleAdmins()">▾ See all admins</button>
+    <div id="adminListBody" class="hidden" style="font-size:13px; margin-top:8px;">Loading…</div>
     <div id="viewingAdminBanner" class="hidden" style="margin-top:10px; font-size:12px; background:rgba(34,211,238,0.1); border:1px solid rgba(34,211,238,0.3); border-radius:10px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
       <span id="viewingAdminText"></span>
-      <button class="act limit" onclick="clearAdminFilter()">Show All</button>
+      <button class="act limit" onclick="clearAdminFilter()">← Back to admins</button>
     </div>
   </div>
 
@@ -317,6 +318,7 @@
       const res = await fetch('/api/admins', { headers: authHeaders() });
       const admins = await res.json();
       adminListCache = admins;
+      applyAdminsOpen();
       document.getElementById('statAdmins').textContent = admins.length;
       const body = document.getElementById('adminListBody');
 
@@ -362,16 +364,33 @@
     }
   }
 
+  let adminsOpen = false;     // admins dropdown expanded?
+  let floorsOpen = false;     // "See all floors" dropdown expanded?
+  function applyAdminsOpen() {
+    const body = document.getElementById('adminListBody');
+    const btn = document.getElementById('adminsToggle');
+    if (!body || !btn) return;
+    const show = adminsOpen && !filterAdminPhone;
+    body.classList.toggle('hidden', !show);
+    btn.classList.toggle('hidden', !!filterAdminPhone);
+    btn.textContent = `${adminsOpen ? '▴ Hide' : '▾ See all'} admins (${adminListCache.length})`;
+  }
+  function toggleAdmins() { adminsOpen = !adminsOpen; applyAdminsOpen(); }
+
   function filterByAdmin(phone, name) {
+    adminsOpen = false; floorsOpen = false; navView = 'floors'; navFloor = null; navFlatKey = null;
     filterAdminPhone = phone;
     document.getElementById('viewingAdminText').textContent = `Showing flats managed by: ${name}`;
     document.getElementById('viewingAdminBanner').classList.remove('hidden');
+    applyAdminsOpen();
     loadFlats();
   }
 
   function clearAdminFilter() {
+    adminsOpen = true; floorsOpen = false; navView = 'floors'; navFloor = null; navFlatKey = null;
     filterAdminPhone = null;
     document.getElementById('viewingAdminBanner').classList.add('hidden');
+    applyAdminsOpen();
     loadFlats();
   }
 
@@ -791,6 +810,61 @@
     } catch (e) { linksMsg(e.message, false); }
   }
   function inviteUrl(token) { return `${window.location.origin}/signup.html?invite=${token}`; }
+  let linksTopOpen = false;
+  let linksOpenFloors = new Set();
+  function renderLinks() {
+    const body = document.getElementById('linksBody');
+    if (linksCache.length === 0) { body.textContent = 'No flats yet.'; return; }
+    const joined = linksCache.filter(l => l.owner_name).length;
+    const floors = [];
+    linksCache.forEach((l, i) => {
+      let f = floors.find(x => x.floor === l.floor);
+      if (!f) { f = { floor: l.floor, label: l.floor_label, items: [] }; floors.push(f); }
+      f.items.push({ l, i });
+    });
+    body.innerHTML = `
+      <details ${linksTopOpen ? 'open' : ''} ontoggle="linksTopOpen = this.open"
+               style="border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:10px 12px; background:rgba(255,255,255,0.02);">
+        <summary style="cursor:pointer; font-size:13px; font-weight:600; color:#f1f5f9; list-style:none;">
+          ▾ See all floors (${floors.length}) <span style="color:#64748b; font-weight:400; font-size:11px;">· ${joined} of ${linksCache.length} owners joined</span>
+        </summary>
+        <div style="margin-top:10px;">
+          ${floors.map(f => {
+            const j = f.items.filter(x => x.l.owner_name).length;
+            return `
+            <details ${linksOpenFloors.has(f.floor) ? 'open' : ''} ontoggle="toggleLinkFloor('${esc(f.floor)}', this.open)"
+                     style="border:1px solid rgba(255,255,255,0.06); border-radius:10px; padding:8px 10px; margin-bottom:8px;">
+              <summary style="cursor:pointer; list-style:none; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                <span style="font-size:13px; font-weight:600; color:#fff;">▸ ${esc(f.label)}</span>
+                <span style="font-size:11px; color:#64748b;">${f.items.length} flat(s) · ${j} joined</span>
+              </summary>
+              <div style="margin-top:6px;">
+                ${f.items.map(({ l, i }) => `
+                  <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-top:1px solid #0f172a; flex-wrap:wrap;">
+                    <b style="color:#fff;">Flat ${esc(l.flat)}</b>
+                    <div style="display:flex; gap:6px; align-items:center;">
+                      ${l.owner_name ? `<span class="badge open">✓ ${esc(l.owner_name)} joined</span>`
+                        : l.token ? `<button class="act limit" onclick="copyLink(${i})">Copy link</button><button class="act open" onclick="whatsappLink(${i})">WhatsApp</button>`
+                        : `<button class="act open" onclick="generateOneLink(${i})">Generate link</button>`}
+                    </div>
+                  </div>`).join('')}
+              </div>
+            </details>`;
+          }).join('')}
+        </div>
+      </details>`;
+  }
+  function toggleLinkFloor(floor, isOpen) { if (isOpen) linksOpenFloors.add(floor); else linksOpenFloors.delete(floor); }
+  async function generateOneLink(i) {
+    const l = linksCache[i];
+    try {
+      linksCache = await api('POST', '/api/layout/links', { apartment: setupApt, floor: l.floor, flat: l.flat });
+      renderLinks();
+      linksMsg(`Link created for ${l.floor_label} · Flat ${l.flat}. Copy or WhatsApp it below.`, true);
+      loadFlats();
+    } catch (e) { linksMsg(e.message, false); }
+  }
+  function inviteUrl(token) { return `${window.location.origin}/signup.html?invite=${token}`; }
   function renderLinks() {
     const body = document.getElementById('linksBody');
     if (linksCache.length === 0) { body.textContent = 'No flats yet.'; return; }
@@ -891,14 +965,14 @@
     // They must click a specific admin in the "Apartment Admins" list above to drill into that admin's flats.
     if (user.role === 'super_admin' && !filterAdminPhone) {
       document.getElementById('navBreadcrumb').textContent = '';
-      area.innerHTML = '<div class="empty">👆 Click an apartment admin above to see their flats, floor by floor.</div>';
+      area.innerHTML = '<div class="empty">👆 Open "See all admins" above and pick an apartment admin to see their floors and flats.</div>';
       return;
     }
 
     if (user.role === 'super_admin' && filterAdminPhone) {
-      document.getElementById('navBreadcrumb').innerHTML = `<a style="color:#22d3ee; cursor:pointer;" onclick="clearAdminFilter()">← All Admins</a> / Floors`;
+      document.getElementById('navBreadcrumb').innerHTML = `<button class="act limit" onclick="clearAdminFilter()">← Back to admins</button>`;
     } else {
-      document.getElementById('navBreadcrumb').textContent = 'Floors';
+      document.getElementById('navBreadcrumb').textContent = '';
     }
 
     // Floors are derived purely from flats that have actually been invited so far —
@@ -912,7 +986,16 @@
 
     if (floorNames.length === 0) { area.innerHTML = ''; return; }
 
-    area.innerHTML = floorNames.map(fl => {
+    const head = `
+      <div class="card" style="margin-bottom:10px; cursor:pointer;" onclick="toggleFloors()">
+        <div class="row">
+          <div class="flatname" style="font-size:15px;">${floorsOpen ? '▴ Hide floors' : '▾ See all floors'} (${floorNames.length})</div>
+          <div class="flatsub">${flatsCache.length} flat(s)</div>
+        </div>
+      </div>`;
+    if (!floorsOpen) { area.innerHTML = head; return; }
+
+    area.innerHTML = head + floorNames.map(fl => {
       const flats = floors[fl];
       const paid = flats.filter(f => f.subscription_active).length;
       return `
@@ -929,7 +1012,11 @@
     }).join('');
   }
 
+  function toggleFloors() { floorsOpen = !floorsOpen; renderFloorsView(); }
+  function backToFloors() { floorsOpen = true; renderFloorsView(); }
+
   function openFloor(floor) {
+    floorsOpen = true;
     navView = 'flats'; navFloor = floor;
     renderNav();
   }
@@ -964,7 +1051,7 @@
   }
 
   function renderFlatsView() {
-    document.getElementById('navBreadcrumb').innerHTML = `<a style="color:#22d3ee; cursor:pointer;" onclick="renderFloorsView()">← Floors</a> / ${esc(floorLabel(navFloor))}`;
+    document.getElementById('navBreadcrumb').innerHTML = `<button class="act limit" onclick="backToFloors()">← Back</button> <span style="margin-left:8px;">${esc(floorLabel(navFloor))}</span>`;
     const area = document.getElementById('navArea');
 
     // Flats shown here are only ones actually invited so far via "Invite a New Flat Owner" —
@@ -1005,7 +1092,7 @@
   function renderDetailView() {
     const [apartment, floor, flat] = navFlatKey.split('|');
     const f = flatsCache.find(x => x.apartment === apartment && x.floor === floor && x.flat === flat);
-    document.getElementById('navBreadcrumb').innerHTML = `<a style="color:#22d3ee; cursor:pointer;" onclick="renderFloorsView()">← Floors</a> / <a style="color:#22d3ee; cursor:pointer;" onclick="openFloor('${floor}')">${floor}</a> / Flat ${flat}`;
+    document.getElementById('navBreadcrumb').innerHTML = `<button class="act limit" onclick="openFloor('${floor}')">← Back</button> <span style="margin-left:8px;">${esc(floorLabel(floor))} · Flat ${esc(flat)}</span>`;
 
     if (!f) { document.getElementById('navArea').innerHTML = '<div class="empty">Flat not found.</div>'; return; }
 
