@@ -1105,6 +1105,37 @@
       : `<div style="width:${size}px; height:${size}px; border-radius:50%; background:rgba(255,255,255,0.08); display:flex; align-items:center; justify-content:center; font-size:${Math.round(size*0.45)}px; flex-shrink:0;">👤</div>`;
   }
 
+  // ----- per-flat invite link (in the floor -> flats list) -----
+  let navLinkTokens = {};   // `${floor}|${flat}` -> invite token
+  function navLinkButtons(floor, flat) {
+    const k = `${floor}|${flat}`;
+    const f = esc(floor), t = esc(flat);
+    return navLinkTokens[k]
+      ? `<button class="act limit" onclick="navCopyLink('${f}','${t}')">Copy link</button><button class="act open" onclick="navWhatsappLink('${f}','${t}')">WhatsApp</button>`
+      : `<button class="act open" onclick="navGenLink('${f}','${t}')">Generate link</button>`;
+  }
+  async function navGenLink(floor, flat) {
+    try {
+      if (!navLayout || !navLayout.apartment) throw new Error('Save the building (Step 1) first.');
+      const list = await api('POST', '/api/layout/links', { apartment: navLayout.apartment, floor, flat });
+      const e = list.find(x => x.floor === floor && x.flat === flat);
+      if (!e || !e.token) throw new Error(e && e.owner_name ? 'This flat already has an owner.' : 'Could not create the link.');
+      navLinkTokens[`${floor}|${flat}`] = e.token;
+      renderFlatsView();
+      loadFlats();
+    } catch (e) { alert(e.message); }
+  }
+  function navCopyLink(floor, flat) {
+    const url = inviteUrl(navLinkTokens[`${floor}|${flat}`]);
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(() => alert('Link copied'), () => window.prompt('Copy this link:', url));
+    else window.prompt('Copy this link:', url);
+  }
+  function navWhatsappLink(floor, flat) {
+    const apt = navLayout ? navLayout.apartment : '';
+    const text = `Hello! Join the ${apt} water management app for ${floorLabel(floor)}, Flat ${flat}. Sign up here (link works once): ${inviteUrl(navLinkTokens[`${floor}|${flat}`])}`;
+    window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
+  }
+
   function renderFlatsView() {
     document.getElementById('navBreadcrumb').innerHTML = `<button class="act limit" onclick="backToFloors()">← Back</button> <span style="margin-left:8px;">${esc(floorLabel(navFloor))}</span>`;
     const area = document.getElementById('navArea');
@@ -1120,10 +1151,10 @@
             ${avatarHtml(null)}
             <div>
               <div class="flatname">Flat ${esc(flat)}</div>
-              <div class="flatsub">Not signed up · no link generated yet</div>
+              <div class="flatsub">Not signed up</div>
             </div>
           </div>
-          <span class="badge closed">No owner</span>
+          <div style="display:flex; gap:6px; align-items:center;">${navLinkButtons(navFloor, flat)}</div>
         </div>`;
       }
       const paid = f.subscription_active;
@@ -1139,6 +1170,7 @@
             </div>
           </div>
           <div style="display:flex; align-items:center; gap:10px;">
+            ${!f.owner_name ? navLinkButtons(f.floor, f.flat) : ''}
             ${paid ? '<span class="badge open">Paid</span>' : '<span class="badge warn">Pending</span>'}
             ${f.has_valve !== false ? `<span class="badge ${f.valve_status === 'OPEN' ? 'open' : 'closed'}">${f.valve_status === 'OPEN' ? 'Open' : 'Closed'}</span>` : '<span class="badge closed">No Valve</span>'}
             ${sensorBadgeHtml(f, false)}
