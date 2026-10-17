@@ -143,33 +143,6 @@
   </div>
 
 
-  <div class="card" style="margin-top:8px;">
-    <div style="font-size:13px; font-weight:600; color:#fff; margin-bottom:10px;">➕ Invite a New Flat Owner</div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
-      <div>
-        <label style="font-size:11px;color:#94a3b8;">Apartment</label><br/>
-        <input class="limitInput" id="inviteApartment" placeholder="apartment name" style="width:130px;" />
-      </div>
-      <div>
-        <label style="font-size:11px;color:#94a3b8;">Floor</label><br/>
-        <input class="limitInput" id="inviteFloor" value="floor1" style="width:90px;" />
-      </div>
-      <div>
-        <label style="font-size:11px;color:#94a3b8;">Flat No</label><br/>
-        <input class="limitInput" id="inviteFlat" placeholder="e.g. 102" style="width:90px;" />
-      </div>
-      <button class="act limit" style="padding:8px 14px;" onclick="createInvite()">Generate Link</button>
-    </div>
-    <div id="inviteResult" style="margin-top:10px; font-size:12px; display:none;">
-      <div style="color:#94a3b8; margin-bottom:4px;">Share this link with the flat owner (works once):</div>
-      <div style="display:flex; gap:8px; align-items:center;">
-        <input id="inviteLinkBox" readonly style="flex:1; background:#0f172a; border:1px solid #334155; color:#22d3ee; border-radius:8px; padding:8px; font-size:11px;" />
-        <button class="act limit" onclick="copyInviteLink()">Copy</button>
-      </div>
-    </div>
-    <div id="inviteError" class="errbox" style="display:none; margin-top:10px;"></div>
-  </div>
-
   <!-- ======== STEP 1: BUILDING SETUP ======== -->
   <div id="layoutCard" class="card" style="margin-top:8px;">
     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:6px;">
@@ -248,7 +221,7 @@
 
   <div id="navBreadcrumb" style="font-size:12px; color:#94a3b8; margin:10px 0;"></div>
   <div id="navArea"></div>
-  <div id="emptyMsg" class="empty hidden">No flats yet. Generate an invite link above to add your first flat owner.</div>
+  <div id="emptyMsg" class="empty hidden">No flats yet. Set up the building and generate flat owner links in Steps 1–3 above.</div>
 </div>
 
 <script>
@@ -400,13 +373,6 @@
     filterAdminPhone = null;
     document.getElementById('viewingAdminBanner').classList.add('hidden');
     loadFlats();
-  }
-
-  if (user.role === 'admin' && user.apartment) {
-    const apField = document.getElementById('inviteApartment');
-    apField.value = user.apartment;
-    apField.readOnly = true;
-    apField.style.opacity = '0.7';
   }
 
   async function createAdminInvite() {
@@ -815,20 +781,28 @@
       loadFlats();
     } catch (e) { linksMsg(e.message, false); }
   }
+  async function generateOneLink(i) {
+    const l = linksCache[i];
+    try {
+      linksCache = await api('POST', '/api/layout/links', { apartment: setupApt, floor: l.floor, flat: l.flat });
+      renderLinks();
+      linksMsg(`Link created for ${l.floor_label} · Flat ${l.flat}. Copy or WhatsApp it below.`, true);
+      loadFlats();
+    } catch (e) { linksMsg(e.message, false); }
+  }
   function inviteUrl(token) { return `${window.location.origin}/signup.html?invite=${token}`; }
   function renderLinks() {
     const body = document.getElementById('linksBody');
     if (linksCache.length === 0) { body.textContent = 'No flats yet.'; return; }
     const joined = linksCache.filter(l => l.owner_name).length;
-    const pending = linksCache.filter(l => !l.owner_name && !l.token).length;
-    let html = `<div style="margin-bottom:8px;">${joined} of ${linksCache.length} owners joined${pending ? ` · <span style="color:#fcd34d;">${pending} flat(s) have no link yet — press "Generate links for all flats"</span>` : ''}</div>`;
+    let html = `<div style="margin-bottom:8px;">${joined} of ${linksCache.length} owners joined</div>`;
     html += linksCache.map((l, i) => `
       <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #0f172a; flex-wrap:wrap;">
         <div><b style="color:#fff;">${esc(l.floor_label)} · Flat ${esc(l.flat)}</b></div>
         <div style="display:flex; gap:6px; align-items:center;">
           ${l.owner_name ? `<span class="badge open">✓ ${esc(l.owner_name)} joined</span>`
             : l.token ? `<button class="act limit" onclick="copyLink(${i})">Copy link</button><button class="act open" onclick="whatsappLink(${i})">WhatsApp</button>`
-            : `<span class="badge closed">no link yet</span>`}
+            : `<button class="act open" onclick="generateOneLink(${i})">Generate link</button>`}
         </div>
       </div>`).join('');
     body.innerHTML = html;
@@ -1197,39 +1171,6 @@
       });
       loadFlats();
     } catch (e) { alert('Could not reach server.'); }
-  }
-
-  async function createInvite() {
-    const apartment = document.getElementById('inviteApartment').value.trim();
-    const floor = document.getElementById('inviteFloor').value.trim();
-    const flat = document.getElementById('inviteFlat').value.trim();
-    const errBox = document.getElementById('inviteError');
-    const resultBox = document.getElementById('inviteResult');
-    errBox.style.display = 'none';
-    resultBox.style.display = 'none';
-
-    if (!apartment || !floor || !flat) { errBox.textContent = 'Please fill in apartment, floor and flat number.'; errBox.style.display = 'block'; return; }
-
-    try {
-      const res = await fetch('/api/invites', {
-        method: 'POST', headers: authHeaders(), body: JSON.stringify({ apartment, floor, flat })
-      });
-      const data = await res.json();
-      if (!res.ok) { errBox.textContent = data.error || 'Could not create invite.'; errBox.style.display = 'block'; return; }
-
-      const link = `${window.location.origin}/signup.html?invite=${data.token}`;
-      document.getElementById('inviteLinkBox').value = link;
-      resultBox.style.display = 'block';
-      document.getElementById('inviteFlat').value = '';
-    } catch (e) {
-      errBox.textContent = 'Could not reach the server.'; errBox.style.display = 'block';
-    }
-  }
-
-  function copyInviteLink() {
-    const box = document.getElementById('inviteLinkBox');
-    box.select();
-    document.execCommand('copy');
   }
 
   async function resetPassword(apartment, floor, flat) {
