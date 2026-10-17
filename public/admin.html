@@ -350,12 +350,12 @@
 
       body.innerHTML = unassignedRow + admins.map(a => `
         <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #0f172a;">
-          <div style="display:flex; align-items:center; gap:10px; cursor:pointer; flex:1;" onclick="filterByAdmin('${a.phone}','${a.name}')">
+          <div style="display:flex; align-items:center; gap:10px; cursor:pointer; flex:1;" onclick="filterByAdmin('${a.phone}','${(a.apartment || a.name).replace(/'/g, '')}')">
             ${a.profile_pic ? `<img src="${a.profile_pic}" style="width:32px; height:32px; border-radius:50%; object-fit:cover;" />` : `<div style="width:32px; height:32px; border-radius:50%; background:rgba(255,255,255,0.08); display:flex; align-items:center; justify-content:center; font-size:15px;">👤</div>`}
-            <div><b style="color:#fff;">${a.name}</b> <span style="color:#64748b; font-size:11px;">· ${a.apartment || 'no apartment set'} · ${a.phone}</span></div>
+            <div><b style="color:#fcd34d; font-size:15px;">🏢 ${a.apartment || 'no apartment set'}</b><div style="color:#64748b; font-size:11px; margin-top:2px;">${a.name} · ${a.phone}</div></div>
           </div>
           <div style="display:flex; align-items:center; gap:10px;">
-            <span style="color:#22d3ee; font-size:12px; cursor:pointer;" onclick="filterByAdmin('${a.phone}','${a.name}')">${a.total_flats} flat(s) →</span>
+            <span style="color:#22d3ee; font-size:12px; cursor:pointer;" onclick="filterByAdmin('${a.phone}','${(a.apartment || a.name).replace(/'/g, '')}')">${a.total_flats} flat(s) →</span>
             <button class="act delete" onclick="deleteAdmin('${a.phone}','${a.name}')">Delete</button>
           </div>
         </div>
@@ -394,7 +394,7 @@
   function filterByAdmin(phone, name) {
     adminsOpen = false; floorsOpen = false; navView = 'floors'; navFloor = null; navFlatKey = null;
     filterAdminPhone = phone;
-    document.getElementById('viewingAdminText').textContent = `Showing flats managed by: ${name}`;
+    document.getElementById('viewingAdminText').textContent = `Viewing apartment: ${name}`;
     document.getElementById('viewingAdminBanner').classList.remove('hidden');
     applyAdminsOpen();
     loadFlats();
@@ -501,7 +501,7 @@
     return m[2] ? `${name} ${m[2]}` : name;
   }
   function floorLabel(key) {
-    const f = (layoutSaved.floors || []).find(x => x.floor === key);
+    const f = ((navLayout && navLayout.floors) || []).find(x => x.floor === key) || (layoutSaved.floors || []).find(x => x.floor === key);
     return f ? f.label : defaultLabel(key);
   }
   function genFlatNumber(key, i) {            // i starts at 1
@@ -677,6 +677,7 @@
       }
       await api('POST', '/api/layout', { apartment: setupApt, floors: layoutRows.map(r => ({ floor: r.floor, label: r.label, flats: r.flats })) });
       layoutMsg('Building saved.', true);
+      navLayoutApt = null;
       boardsDirty = false;
       await loadLayout();
       loadFlats();
@@ -924,6 +925,40 @@
     if (user.role === 'super_admin') loadAdminList();
   }
 
+  // Layout (all floors + all flats) of the apartment being browsed, so floors/flats show even before owners sign up
+  let navLayout = null, navLayoutApt = null;
+  async function loadNavLayout() {
+    let apt = null;
+    if (user.role === 'admin') apt = user.apartment || null;
+    else if (filterAdminPhone && filterAdminPhone !== '__unassigned__') {
+      const a = adminListCache.find(x => x.phone === filterAdminPhone);
+      apt = a ? a.apartment : null;
+    }
+    if (!apt) { navLayout = null; navLayoutApt = null; return; }
+    if (navLayout && navLayoutApt === apt) return;
+    try {
+      navLayout = await api('GET', '/api/layout?apartment=' + encodeURIComponent(apt));
+      navLayoutApt = apt;
+    } catch (e) { navLayout = null; navLayoutApt = null; }
+  }
+  // Floors -> flats for the navigator: every flat from the saved building, merged with live data where it exists
+  function navFloorsData() {
+    const out = [], map = new Map();
+    ((navLayout && navLayout.floors) || []).forEach(f => {
+      const o = { floor: f.floor, label: f.label, flats: f.flats.map(fl => ({ flat: fl, data: null })) };
+      out.push(o); map.set(f.floor, o);
+    });
+    flatsCache.forEach(d => {
+      let o = map.get(d.floor);
+      if (!o) { o = { floor: d.floor, label: floorLabel(d.floor), flats: [] }; out.push(o); map.set(d.floor, o); }
+      const e = o.flats.find(x => x.flat === d.flat);
+      if (e) e.data = d; else o.flats.push({ flat: d.flat, data: d });
+    });
+    out.sort((a, b) => floorSortKey(a.floor) - floorSortKey(b.floor));
+    out.forEach(o => o.flats.sort((a, b) => flatSortKey(a.flat) - flatSortKey(b.flat)));
+    return out;
+  }
+
   async function loadFlats() {
     try {
       const url = filterAdminPhone ? `/api/flats?admin_phone=${filterAdminPhone}` : '/api/flats';
@@ -931,6 +966,7 @@
       if (res.status === 401 || res.status === 403) { logout(); return; }
       const flats = await res.json();
       flatsCache = flats;
+      await loadNavLayout();
 
       const emptyMsg = document.getElementById('emptyMsg');
       emptyMsg.classList.toggle('hidden', flats.length !== 0);
@@ -1001,35 +1037,28 @@
       document.getElementById('navBreadcrumb').textContent = '';
     }
 
-    // Floors are derived purely from flats that have actually been invited so far —
-    // every building's floor/flat numbering is different, so there's no fixed pattern to assume.
-    const floors = {};
-    flatsCache.forEach(f => {
-      if (!floors[f.floor]) floors[f.floor] = [];
-      floors[f.floor].push(f);
-    });
-    const floorNames = Object.keys(floors).sort((a, b) => floorSortKey(a) - floorSortKey(b));
-
-    if (floorNames.length === 0) { area.innerHTML = ''; return; }
+    const floorList = navFloorsData();
+    if (floorList.length === 0) { area.innerHTML = ''; return; }
+    const totalFlats = floorList.reduce((n, f) => n + f.flats.length, 0);
 
     const head = `
       <div class="card" style="margin-bottom:10px; cursor:pointer;" onclick="toggleFloors()">
         <div class="row">
-          <div class="flatname" style="font-size:15px;">${floorsOpen ? '▴ Hide floors' : '▾ See all floors'} (${floorNames.length})</div>
-          <div class="flatsub">${flatsCache.length} flat(s)</div>
+          <div class="flatname" style="font-size:15px;">${floorsOpen ? '▴ Hide floors' : '▾ See all floors'} (${floorList.length})</div>
+          <div class="flatsub">${totalFlats} flat(s)</div>
         </div>
       </div>`;
     if (!floorsOpen) { area.innerHTML = head; return; }
 
-    area.innerHTML = head + floorNames.map(fl => {
-      const flats = floors[fl];
-      const paid = flats.filter(f => f.subscription_active).length;
+    area.innerHTML = head + floorList.map(f => {
+      const joined = f.flats.filter(x => x.data && x.data.owner_name).length;
+      const paid = f.flats.filter(x => x.data && x.data.subscription_active).length;
       return `
-        <div class="card" style="margin-bottom:10px; cursor:pointer;" onclick="openFloor('${fl}')">
+        <div class="card" style="margin-bottom:10px; cursor:pointer;" onclick="openFloor('${esc(f.floor)}')">
           <div class="row">
             <div>
-              <div class="flatname" style="font-size:15px;">${esc(floorLabel(fl))}</div>
-              <div class="flatsub">${flats.length} flat(s) · ${paid} paid</div>
+              <div class="flatname" style="font-size:15px;">${esc(f.label)}</div>
+              <div class="flatsub">${f.flats.length} flat(s) · ${joined} joined · ${paid} paid</div>
             </div>
             <div style="color:#22d3ee; font-size:18px;">→</div>
           </div>
@@ -1080,11 +1109,23 @@
     document.getElementById('navBreadcrumb').innerHTML = `<button class="act limit" onclick="backToFloors()">← Back</button> <span style="margin-left:8px;">${esc(floorLabel(navFloor))}</span>`;
     const area = document.getElementById('navArea');
 
-    // Flats shown here are only ones actually invited so far via "Invite a New Flat Owner" —
-    // no fixed numbering pattern is assumed since every building differs.
-    const flats = flatsCache.filter(f => f.floor === navFloor).sort((a, b) => flatSortKey(a.flat) - flatSortKey(b.flat));
+    const fl = navFloorsData().find(x => x.floor === navFloor);
+    const flats = fl ? fl.flats : [];
 
-    area.innerHTML = flats.map(f => {
+    area.innerHTML = flats.map(({ flat, data: f }) => {
+      if (!f) {
+        return `
+        <div class="card" style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            ${avatarHtml(null)}
+            <div>
+              <div class="flatname">Flat ${esc(flat)}</div>
+              <div class="flatsub">Not signed up · no link generated yet</div>
+            </div>
+          </div>
+          <span class="badge closed">No owner</span>
+        </div>`;
+      }
       const paid = f.subscription_active;
       const key = `${f.apartment}|${f.floor}|${f.flat}`;
       return `
@@ -1093,8 +1134,8 @@
             ${!paid && f.owner_name ? `<input type="checkbox" class="payCheckbox" data-key="${key}" onclick="event.stopPropagation()" onchange="updatePaySelected()" />` : ''}
             ${f.owner_name ? avatarHtml(f.owner_pic) : ''}
             <div>
-              <div class="flatname">Flat ${f.flat}</div>
-              <div class="flatsub">${f.owner_name || 'Not signed up'}</div>
+              <div class="flatname">Flat ${esc(f.flat)}</div>
+              <div class="flatsub">${esc(f.owner_name || 'Not signed up')}</div>
             </div>
           </div>
           <div style="display:flex; align-items:center; gap:10px;">
@@ -1107,8 +1148,6 @@
       `;
     }).join('');
   }
-
-
 
   function openFlat(key) {
     navView = 'detail'; navFlatKey = key;
