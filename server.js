@@ -753,13 +753,16 @@ app.get("/api/device/command/:apartment/:floor/:flat", (req, res) => {
   res.json({ command });
 });
 
-// ================= ESP BOARDS (one universal firmware, mapping managed from the Admin page) =================
-// Each physical board has 8 flow-sensor channels (TB1..TB8). The board knows only its apartment name
-// and board number (typed once in its WiFi setup portal). Which flat is wired to which channel is
-// stored here and fetched by the board every cycle, so no re-flashing is ever needed.
+// ================= ESP BOARDS + BUILDING LAYOUT =================
+// Admin describes the building once (floors -> flats), then maps each board's 8 sensor terminals (TB1..TB8)
+// to those flats. A physical board only knows its apartment name + board number (typed once in its WiFi portal);
+// it fetches its flat mapping from here every cycle, so no re-flashing is ever needed.
 
+// Boards/layouts are stored under a lower-cased, trimmed apartment key so "Trail Apartments" and "trail apartments" are one apartment.
+const boardKey = (a) => String(a || "").trim().toLowerCase();
 const BOARD_CHANNELS = 8;
 const BOARD_ONLINE_MS = 90 * 1000;
+const MAX_FLATS_PER_APARTMENT = 500;
 
 function normalizeChannels(raw) {
   const out = [];
@@ -771,27 +774,37 @@ function normalizeChannels(raw) {
   return out;
 }
 
-// All apartment names that actually have flat owners or pending invites (the source of truth for valid names)
+// Valid apartment names: every admin's apartment, every saved layout, and every apartment that already has owners/invites.
+// Priority order decides the canonical spelling (admin's own spelling wins).
 async function dbKnownApartments() {
-  const [owners, invites] = await Promise.all([dbGetAllFlatOwners(), dbGetUnusedFlatInvites()]);
-  const set = new Set();
-  owners.forEach((u) => u.apartment && set.add(u.apartment));
-  invites.forEach((i) => i.apartment && set.add(i.apartment));
-  return [...set];
+  const [admins, owners, invites, layouts] = await Promise.all([
+    dbGetAllAdmins(), dbGetAllFlatOwners(), dbGetUnusedFlatInvites(),
+    supabase.from("apartment_layouts").select("apartment").then((r) => r.data || []),
+  ]);
+  const list = [];
+  admins.forEach((a) => a.apartment && list.push(a.apartment));
+  layouts.forEach((l) => l.apartment && list.push(l.apartment));
+  owners.forEach((u) => u.apartment && list.push(u.apartment));
+  invites.forEach((i) => i.apartment && list.push(i.apartment));
+  return list;
 }
 async function resolveApartment(name) {
-  const wanted = String(name || "").trim().toLowerCase();
+  const wanted = boardKey(name);
   if (!wanted) return null;
   const known = await dbKnownApartments();
-  return known.find((a) => a.trim().toLowerCase() === wanted) || null;
+  return known.find((a) => boardKey(a) === wanted) || null;
 }
 
+async function dbGetLayout(apartment) {
+  const { data } = await supabase.from("apartment_layouts").select("*").eq("apartment_key", boardKey(apartment)).maybeSingle();
+  return data;
+}
 async function dbGetBoard(apartment, boardNo) {
-  const { data } = await supabase.from("esp_boards").select("*").eq("apartment", apartment).eq("board_no", boardNo).maybeSingle();
+  const { data } = await supabase.from("esp_boards").select("*").eq("apartment", boardKey(apartment)).eq("board_no", boardNo).maybeSingle();
   return data;
 }
 async function dbGetBoards(apartment) {
-  const { data } = await supabase.from("esp_boards").select("*").eq("apartment", apartment).order("board_no", { ascending: true });
+  const { data } = await supabase.from("esp_boards").select("*").eq("apartment", boardKey(apartment)).order("board_no", { ascending: true });
   return data || [];
 }
 function boardWifiResetPending(b) {
@@ -799,8 +812,24 @@ function boardWifiResetPending(b) {
   if (!b.wifi_reset_done_at) return true;
   return new Date(b.wifi_reset_requested_at) > new Date(b.wifi_reset_done_at);
 }
+function layoutFlatCount(floors) {
+  return (Array.isArray(floors) ? floors : []).reduce((n, f) => n + ((f && Array.isArray(f.flats)) ? f.flats.length : 0), 0);
+}
+
+// Raise the apartment's "total boards" (never lowers it: an admin can lower it from the Admin page).
+async function raiseTotalBoards(apartment, total) {
+  const existing = await dbGetLayout(apartment);
+  if (existing) {
+    if ((existing.total_boards || 0) < total) await supabase.from("apartment_layouts").update({ total_boards: total, updated_at: new Date().toISOString() }).eq("apartment_key", boardKey(apartment));
+  } else {
+    const admins = await dbGetAllAdmins();
+    const adm = admins.find((a) => boardKey(a.apartment) === boardKey(apartment));
+    await supabase.from("apartment_layouts").insert({ apartment_key: boardKey(apartment), apartment, admin_phone: adm ? adm.phone : null, floors: [], total_boards: total });
+  }
+}
 
 // Board asks "what are my channels?" every cycle. Doubles as heartbeat + remote-command channel.
+// Optional ?total=N : the "Total boards" value typed in the board's WiFi portal.
 app.get("/api/device/config/:apartment/:board", ah(async (req, res) => {
   const boardNo = parseInt(req.params.board, 10);
   if (!boardNo || boardNo < 1 || boardNo > 999) return res.status(400).json({ error: "Invalid board number" });
@@ -808,13 +837,16 @@ app.get("/api/device/config/:apartment/:board", ah(async (req, res) => {
   const apartment = await resolveApartment(req.params.apartment);
   if (!apartment) return res.status(404).json({ error: "unknown_apartment" });
 
+  const total = parseInt(req.query.total, 10);
+  if (total >= 1 && total <= 99) await raiseTotalBoards(apartment, Math.max(total, boardNo));
+
   let board = await dbGetBoard(apartment, boardNo);
   const now = new Date().toISOString();
   if (!board) {
-    await supabase.from("esp_boards").insert({ apartment, board_no: boardNo, channels: [], last_seen: now });
+    await supabase.from("esp_boards").insert({ apartment: boardKey(apartment), board_no: boardNo, channels: [], last_seen: now });
     board = { channels: [] };
   } else {
-    await supabase.from("esp_boards").update({ last_seen: now }).eq("apartment", apartment).eq("board_no", boardNo);
+    await supabase.from("esp_boards").update({ last_seen: now }).eq("apartment", boardKey(apartment)).eq("board_no", boardNo);
   }
 
   res.json({
@@ -828,39 +860,177 @@ app.post("/api/device/wifi-reset-ack/:apartment/:board", ah(async (req, res) => 
   const boardNo = parseInt(req.params.board, 10);
   const apartment = await resolveApartment(req.params.apartment);
   if (!apartment || !boardNo) return res.status(404).json({ error: "unknown_board" });
-  await supabase.from("esp_boards").update({ wifi_reset_done_at: new Date().toISOString() }).eq("apartment", apartment).eq("board_no", boardNo);
+  await supabase.from("esp_boards").update({ wifi_reset_done_at: new Date().toISOString() }).eq("apartment", boardKey(apartment)).eq("board_no", boardNo);
   res.json({ success: true });
 }));
 
-// ---- Admin-side board management ----
+// ---- Admin-side: which apartment may this user manage? ----
 async function adminCanUseApartment(user, apartment) {
   if (user.role === "super_admin") return true;
+  const lc = boardKey(apartment);
+  if (user.apartment && boardKey(user.apartment) === lc) return true;
   const [owners, invites] = await Promise.all([dbGetAllFlatOwners(), dbGetUnusedFlatInvites()]);
-  return owners.some((u) => u.apartment === apartment && u.managed_by === user.phone)
-      || invites.some((i) => i.apartment === apartment && i.created_by === user.phone);
+  return owners.some((u) => boardKey(u.apartment) === lc && u.managed_by === user.phone)
+      || invites.some((i) => boardKey(i.apartment) === lc && i.created_by === user.phone);
+}
+// Admin: their own apartment always. Super admin: the one they picked.
+function requestedApartment(req) {
+  if (req.user.role === "admin") return String(req.user.apartment || (req.query && req.query.apartment) || (req.body && req.body.apartment) || "");
+  return String((req.query && req.query.apartment) || (req.body && req.body.apartment) || "");
+}
+async function canonicalApartment(name) { return (await resolveApartment(name)) || String(name || "").trim(); }
+// The admin account (phone) that manages an apartment; used as "managed_by" for invites.
+async function adminPhoneForApartment(req, apartment) {
+  if (req.user.role === "admin") return req.user.phone;
+  const admins = await dbGetAllAdmins();
+  const a = admins.find((x) => boardKey(x.apartment) === boardKey(apartment));
+  return a ? a.phone : null;
 }
 
-app.get("/api/boards", requireAuth, requireAdmin, ah(async (req, res) => {
-  const apartment = String(req.query.apartment || "");
-  if (!apartment) return res.status(400).json({ error: "apartment is required" });
-  if (!(await adminCanUseApartment(req.user, apartment))) return res.status(403).json({ error: "Not your apartment" });
+// Apartment list for the selector (admin: just their own)
+app.get("/api/layout/apartments", requireAuth, requireAdmin, ah(async (req, res) => {
+  if (req.user.role === "admin") return res.json(req.user.apartment ? [req.user.apartment] : []);
+  const admins = await dbGetAllAdmins();
+  const seen = new Map();
+  admins.forEach((a) => { if (a.apartment && !seen.has(boardKey(a.apartment))) seen.set(boardKey(a.apartment), a.apartment); });
+  res.json([...seen.values()].sort());
+}));
 
-  const boards = await dbGetBoards(apartment);
-  res.json(boards.map((b) => ({
-    board_no: b.board_no,
-    channels: normalizeChannels(b.channels),
-    last_seen: b.last_seen,
-    online: !!b.last_seen && (Date.now() - new Date(b.last_seen).getTime()) <= BOARD_ONLINE_MS,
-    wifi_reset_pending: boardWifiResetPending(b),
-  })));
+app.get("/api/layout", requireAuth, requireAdmin, ah(async (req, res) => {
+  const apt = requestedApartment(req);
+  if (!apt) return res.status(400).json({ error: "apartment is required" });
+  if (!(await adminCanUseApartment(req.user, apt))) return res.status(403).json({ error: "Not your apartment" });
+  const apartment = await canonicalApartment(apt);
+  const l = await dbGetLayout(apartment);
+  const floors = (l && l.floors) || [];
+  const flats = layoutFlatCount(floors);
+  res.json({ apartment, floors, flats, total_boards: (l && l.total_boards) || 0, suggested_boards: Math.ceil(flats / BOARD_CHANNELS) });
+}));
+
+// Save floors (floors -> flat numbers) and/or total number of boards
+app.post("/api/layout", requireAuth, requireAdmin, ah(async (req, res) => {
+  const apt = requestedApartment(req);
+  if (!apt) return res.status(400).json({ error: "apartment is required" });
+  if (!(await adminCanUseApartment(req.user, apt))) return res.status(403).json({ error: "Not your apartment" });
+  const apartment = await canonicalApartment(apt);
+  const existing = await dbGetLayout(apartment);
+
+  const update = { updated_at: new Date().toISOString() };
+
+  if (req.body.floors !== undefined) {
+    if (!Array.isArray(req.body.floors)) return res.status(400).json({ error: "floors must be a list" });
+    const floors = [], floorKeys = new Set();
+    let total = 0;
+    for (const f of req.body.floors) {
+      const key = String((f && f.floor) || "").trim();
+      const label = String((f && f.label) || key).trim();
+      if (!key) return res.status(400).json({ error: "Every floor needs a name." });
+      if (key.includes("/")) return res.status(400).json({ error: `Floor name "${key}" cannot contain "/".` });
+      if (floorKeys.has(key.toLowerCase())) return res.status(400).json({ error: `Floor "${label}" is listed twice.` });
+      floorKeys.add(key.toLowerCase());
+      const flats = [], flatSet = new Set();
+      for (const raw of (Array.isArray(f.flats) ? f.flats : [])) {
+        const fl = String(raw).trim();
+        if (!fl) continue;
+        if (fl.includes("/")) return res.status(400).json({ error: `Flat "${fl}" cannot contain "/".` });
+        if (flatSet.has(fl.toLowerCase())) return res.status(400).json({ error: `Flat ${fl} appears twice on ${label}.` });
+        flatSet.add(fl.toLowerCase());
+        flats.push(fl);
+      }
+      total += flats.length;
+      floors.push({ floor: key, label, flats });
+    }
+    if (total > MAX_FLATS_PER_APARTMENT) return res.status(400).json({ error: `Too many flats (max ${MAX_FLATS_PER_APARTMENT}).` });
+    update.floors = floors;
+    // keep "total boards" at least big enough for all flats
+    const need = Math.ceil(total / BOARD_CHANNELS);
+    if ((existing ? existing.total_boards || 0 : 0) < need) update.total_boards = need;
+  }
+  if (req.body.total_boards !== undefined) {
+    const n = parseInt(req.body.total_boards, 10);
+    if (isNaN(n) || n < 0 || n > 99) return res.status(400).json({ error: "Total boards must be a number from 0 to 99." });
+    update.total_boards = n;
+  }
+
+  if (existing) {
+    await supabase.from("apartment_layouts").update(update).eq("apartment_key", boardKey(apartment));
+  } else {
+    await supabase.from("apartment_layouts").insert({
+      apartment_key: boardKey(apartment), apartment, admin_phone: await adminPhoneForApartment(req, apartment),
+      floors: update.floors || [], total_boards: update.total_boards || 0,
+    });
+  }
+  res.json({ success: true });
+}));
+
+// ---- Flat owner invite links for every flat in the layout ----
+async function buildLinks(apartment, create, createdBy) {
+  const l = await dbGetLayout(apartment);
+  const floors = (l && l.floors) || [];
+  const [owners, invites] = await Promise.all([dbGetAllFlatOwners(), dbGetUnusedFlatInvites()]);
+  const out = [];
+  for (const fl of floors) {
+    for (const flat of fl.flats) {
+      const owner = owners.find((u) => boardKey(u.apartment) === boardKey(apartment) && u.floor === fl.floor && u.flat === flat);
+      let invite = invites.find((i) => boardKey(i.apartment) === boardKey(apartment) && i.floor === fl.floor && i.flat === flat);
+      if (!owner && !invite && create) {
+        const token = crypto.randomBytes(12).toString("hex");
+        await dbCreateFlatInvite(token, apartment, fl.floor, flat, createdBy);
+        invite = { token };
+      }
+      out.push({ floor: fl.floor, floor_label: fl.label, flat, owner_name: owner ? owner.name : null, token: (!owner && invite) ? invite.token : null });
+    }
+  }
+  return out;
+}
+app.get("/api/layout/links", requireAuth, requireAdmin, ah(async (req, res) => {
+  const apt = requestedApartment(req);
+  if (!apt) return res.status(400).json({ error: "apartment is required" });
+  if (!(await adminCanUseApartment(req.user, apt))) return res.status(403).json({ error: "Not your apartment" });
+  res.json(await buildLinks(await canonicalApartment(apt), false, null));
+}));
+app.post("/api/layout/links", requireAuth, requireAdmin, ah(async (req, res) => {
+  const apt = requestedApartment(req);
+  if (!apt) return res.status(400).json({ error: "apartment is required" });
+  if (!(await adminCanUseApartment(req.user, apt))) return res.status(403).json({ error: "Not your apartment" });
+  const apartment = await canonicalApartment(apt);
+  const createdBy = await adminPhoneForApartment(req, apartment);
+  if (!createdBy) return res.status(400).json({ error: "No admin account found for this apartment." });
+  res.json(await buildLinks(apartment, true, createdBy));
+}));
+
+// ---- Boards ----
+app.get("/api/boards", requireAuth, requireAdmin, ah(async (req, res) => {
+  const apt = requestedApartment(req);
+  if (!apt) return res.status(400).json({ error: "apartment is required" });
+  if (!(await adminCanUseApartment(req.user, apt))) return res.status(403).json({ error: "Not your apartment" });
+  const apartment = await canonicalApartment(apt);
+
+  const [rows, layout] = await Promise.all([dbGetBoards(apartment), dbGetLayout(apartment)]);
+  const total = (layout && layout.total_boards) || 0;
+  const maxNo = rows.reduce((m, b) => Math.max(m, b.board_no), total);
+  const out = [];
+  for (let n = 1; n <= maxNo; n++) {
+    const b = rows.find((r) => r.board_no === n);
+    if (!b && n > total) continue;
+    out.push({
+      board_no: n,
+      channels: normalizeChannels(b ? b.channels : []),
+      last_seen: b ? b.last_seen : null,
+      online: !!(b && b.last_seen) && (Date.now() - new Date(b.last_seen).getTime()) <= BOARD_ONLINE_MS,
+      wifi_reset_pending: boardWifiResetPending(b),
+    });
+  }
+  res.json({ total_boards: total, boards: out });
 }));
 
 app.post("/api/boards/:board/channels", requireAuth, requireAdmin, ah(async (req, res) => {
   const boardNo = parseInt(req.params.board, 10);
-  const apartment = String((req.body && req.body.apartment) || "");
+  const apt = requestedApartment(req);
   if (!boardNo || boardNo < 1 || boardNo > 999) return res.status(400).json({ error: "Invalid board number" });
-  if (!apartment) return res.status(400).json({ error: "apartment is required" });
-  if (!(await adminCanUseApartment(req.user, apartment))) return res.status(403).json({ error: "Not your apartment" });
+  if (!apt) return res.status(400).json({ error: "apartment is required" });
+  if (!(await adminCanUseApartment(req.user, apt))) return res.status(403).json({ error: "Not your apartment" });
+  const apartment = await canonicalApartment(apt);
 
   const channels = normalizeChannels(req.body.channels);
 
@@ -883,28 +1053,28 @@ app.post("/api/boards/:board/channels", requireAuth, requireAdmin, ah(async (req
   }
 
   const existing = await dbGetBoard(apartment, boardNo);
-  if (existing) await supabase.from("esp_boards").update({ channels }).eq("apartment", apartment).eq("board_no", boardNo);
-  else await supabase.from("esp_boards").insert({ apartment, board_no: boardNo, channels });
+  if (existing) await supabase.from("esp_boards").update({ channels }).eq("apartment", boardKey(apartment)).eq("board_no", boardNo);
+  else await supabase.from("esp_boards").insert({ apartment: boardKey(apartment), board_no: boardNo, channels });
   res.json({ success: true });
 }));
 
 app.delete("/api/boards/:board", requireAuth, requireAdmin, ah(async (req, res) => {
   const boardNo = parseInt(req.params.board, 10);
-  const apartment = String(req.query.apartment || "");
-  if (!boardNo || !apartment) return res.status(400).json({ error: "board and apartment are required" });
-  if (!(await adminCanUseApartment(req.user, apartment))) return res.status(403).json({ error: "Not your apartment" });
-  await supabase.from("esp_boards").delete().eq("apartment", apartment).eq("board_no", boardNo);
+  const apt = requestedApartment(req);
+  if (!boardNo || !apt) return res.status(400).json({ error: "board and apartment are required" });
+  if (!(await adminCanUseApartment(req.user, apt))) return res.status(403).json({ error: "Not your apartment" });
+  await supabase.from("esp_boards").delete().eq("apartment", boardKey(apt)).eq("board_no", boardNo);
   res.json({ success: true });
 }));
 
 // Ask every board of an apartment to forget its WiFi (delivered on the board's next 30s poll)
 app.post("/api/boards/wifi-reset", requireAuth, requireAdmin, ah(async (req, res) => {
-  const apartment = String((req.body && req.body.apartment) || "");
-  if (!apartment) return res.status(400).json({ error: "apartment is required" });
-  if (!(await adminCanUseApartment(req.user, apartment))) return res.status(403).json({ error: "Not your apartment" });
-  const boards = await dbGetBoards(apartment);
-  if (boards.length === 0) return res.status(404).json({ error: "No boards registered for this apartment yet." });
-  await supabase.from("esp_boards").update({ wifi_reset_requested_at: new Date().toISOString() }).eq("apartment", apartment);
+  const apt = requestedApartment(req);
+  if (!apt) return res.status(400).json({ error: "apartment is required" });
+  if (!(await adminCanUseApartment(req.user, apt))) return res.status(403).json({ error: "Not your apartment" });
+  const boards = await dbGetBoards(apt);
+  if (boards.length === 0) return res.status(404).json({ error: "No boards have connected for this apartment yet." });
+  await supabase.from("esp_boards").update({ wifi_reset_requested_at: new Date().toISOString() }).eq("apartment", boardKey(apt));
   res.json({ success: true, boards: boards.length });
 }));
 
